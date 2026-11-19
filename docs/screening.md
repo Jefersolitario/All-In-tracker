@@ -90,10 +90,19 @@ Then run `pytest -q`. It must pass before anything is pushed.
 
 ## 7. Branch and pull request
 
-- Work on the branch `claude/screening`. If it exists on the remote with commits that `main` does not have, continue on it after merging `main` into it. Otherwise start it from `main`.
+Which branch to work on:
+
+1. If no branch named `claude/screening` (or `claude/screening-<date>`) exists on the remote, start `claude/screening` from `main`.
+2. If one exists, check it out and merge `main` into it, so that it sees the latest catalogue. A clean merge, or a fast-forward, means continue on it.
+3. If that merge conflicts, abort it. Then, if every call and every log line on the branch is already on `main`, the branch was merged in a way that rewrote it: leave it alone, start a new branch `claude/screening-<today's date>` from `main`, and say in the summary that the old branch can be deleted. Otherwise stop and report the conflict.
+
+Always read the ledger and the log from the branch you ended up on, not from `main`: it may hold lines that are not merged yet.
+
+What to push:
+
 - A run that only adds log lines pushes the branch and opens nothing.
-- A run that adds a call, or has something for "Needs your decision", opens one pull request into `main`, or updates the open one. Its description lists: the calls added (episode, speaker, call, instrument, where in the episode, confidence); what needs a decision; the episodes read with no call; the episodes still waiting for a transcript.
-- Never push to `main`, never merge, never fill in `recorded_utc`, and never change the legs or dates of a call that already has a stamp.
+- A run that adds a call, or has something for "Needs your decision", opens one pull request into `main`, or updates the description of the open one. The description lists: the calls added (episode, speaker, call, instrument, where in the episode, confidence); what needs a decision; the episodes read with no call; the episodes still waiting for a transcript. It ends with: "Merging this trades the calls: each is bought at the close of the first US session after the merge (New York date)."
+- Never push to `main`, never merge, never force-push, never delete a branch, never fill in `recorded_utc`, and never change the legs or dates of a call that already has a stamp.
 
 ## 8. For the owner
 
