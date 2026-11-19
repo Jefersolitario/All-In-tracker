@@ -153,10 +153,11 @@ def test_stamping_fills_only_new_empty_lines_and_changes_nothing_else(tmp_path, 
 
 
 def test_a_pending_call_does_not_reach_the_books(tmp_path, capsys, ledger_all):
-    """Run the real pipeline twice, once with an unstamped line added: the published days are identical."""
+    """Run the real pipeline twice, once with an unstamped line added: the published days are identical.
+    The line is dated so that trading it by episode date would have changed days that are already in the record."""
     new_id = max(c.call_id for c in ledger_all) + 1
     path = tmp_path / "calls.csv"
-    path.write_text((ROOT / "calls.csv").read_text(encoding="utf-8") + f"{new_id},guid-a,2026-11-18T22:00:00Z,Friedberg,Uranium,URA:1,active,,,,\n", encoding="utf-8")
+    path.write_text((ROOT / "calls.csv").read_text(encoding="utf-8") + f"{new_id},guid-a,2026-11-10T15:00:00Z,Friedberg,Uranium,URA:1,active,,,,\n", encoding="utf-8")
     assert cli.main(["run", "--calls", str(path), "--out", str(tmp_path / "out")]) == 0
     assert f"call {new_id} (Friedberg: Uranium) is on file and not traded yet" in capsys.readouterr().out
     with_pending = pl.read_parquet(tmp_path / "out" / "allin_12m" / "daily.parquet")
@@ -317,6 +318,38 @@ def test_a_new_call_never_changes_days_already_published(calls, store):
     assert after.equity == before.equity
     backdated = make_call(published="2026-11-10T23:03:00Z", legs="SPY:1")
     assert engine.simulate(engine.plan([*calls, backdated], s), store, 10_000.0).equity != before.equity
+
+
+def test_a_call_that_loses_everything_is_closed_at_nothing():
+    days = weekdays(dt.date(2026, 1, 5), 8)
+    store_ = prices.Prices({"SPY": {d: 100.0 * 1.01 ** i for i, d in enumerate(days)}, "UP": {d: 10.0 * 1.3 ** i for i, d in enumerate(days)}})
+    long_ = make_call(call_id=1, published="2026-01-03T15:00:00Z", legs="SPY:1")
+    short = make_call(call_id=2, published="2026-01-03T15:00:00Z", legs="UP:-1")             # loses 30% of the stake a day, then more
+    res = engine.simulate(engine.plan([long_, short], days), store_, 10_000.0)
+    assert res.wiped == {2: days[3]}                                                         # 1.3 ** 3 = 2.2: the short has more than doubled
+    assert res.n_active == [2, 2, 2, 1, 1, 1, 1, 1] and res.n_trades[3] == 1
+    assert res.equity[3] == pytest.approx(5_000 * 1.01 ** 3)                                 # the short's half is gone, not more than gone
+    assert res.equity[-1] == pytest.approx(5_000 * 1.01 ** 7)                                # the rest carries on alone and the short never returns
+    assert all(v == v and v > 0 for v in res.equity) and set(res.holdings) == {1}
+    assert sum(sum(m.values()) for m in res.call_pnl) == pytest.approx(res.equity[-1] - 10_000)
+
+
+def test_a_forced_exit_on_or_before_the_entry_means_the_call_is_never_held(store):
+    s = store.sessions()
+    gone = make_call(published="2026-10-12T15:49:00Z", forced="2026-10-13")                  # the ticker stopped trading on the entry day
+    assert [p for p in engine.plan([gone], s) if p.call.call_id == 900] == []
+    later = make_call(published="2026-10-12T15:49:00Z", forced="2026-10-20")
+    assert engine.plan([later], s)[0].exit == dt.date(2026, 10, 20)
+
+
+def test_a_call_can_enter_during_a_long_holiday_abroad(calls, store):
+    """Seoul was closed from 3 to 9 October 2025. A call entering on the 8th is bought at the last Seoul close, six days old."""
+    rows = [d for d in store._dates["SKH-USD"] if dt.date(2025, 10, 1) <= d <= dt.date(2025, 10, 10)]
+    assert rows == [dt.date(2025, 10, 1), dt.date(2025, 10, 2), dt.date(2025, 10, 10)]
+    c = make_call(published="2025-10-07T15:00:00Z", legs="MU:0.5;SKH-USD:0.5")
+    p = engine.plan([c], store.sessions())[0]
+    assert p.entry == dt.date(2025, 10, 8) and engine.call_value(c, p.entry, p.entry, store) == 1.0
+    engine.simulate(engine.plan([*calls, c], store.sessions()), store, 10_000.0, end=dt.date(2025, 10, 31))
 
 
 # ---------- live price update ----------
@@ -515,6 +548,63 @@ def test_first_production_days(tmp_path, calls, store, cfg):
     held = list(csv.DictReader((tmp_path / "results" / "allin_12m" / "positions.csv").open()))
     assert len(held) == 19 and {r["book"] for r in held} == {"paper"} and {r["bought"] for r in held} == {"2026-11-19"}
     assert {r["leaves_on_or_after"] for r in held if r["call_id"] == "30"} == {"2027-01-12"}
+
+
+def test_a_late_foreign_bar_never_changes_a_published_day(tmp_path, calls, store, cfg):
+    """The vendor posts Friday's Seoul bars a run late. Friday is published with Thursday's Seoul close and stays that way."""
+    data = tmp_path / "data"; data.mkdir(); shutil.copy(ROOT / "data" / prices.SNAPSHOT, data / prices.SNAPSHOT)
+    out = str(tmp_path / "results")
+    thu, fri, mon = dt.date(2026, 11, 19), dt.date(2026, 11, 20), dt.date(2026, 11, 23)
+    local = {"000660.KS": "SKH-USD", "005930.KS": "SAMSUNG-USD"}
+    moves = {thu: 1.00, fri: 1.02, mon: 1.00}; seoul = {thu: 1.00, fri: 1.05, mon: 0.99}
+
+    def vendor(known_days, seoul_known):
+        def fetch(symbol, start):
+            if symbol == "KRW=X":
+                return [(d, 1350.0, 1350.0) for d in weekdays(start, 60) if d <= max(known_days)]
+            base, k = local.get(symbol, symbol), (1350.0 if symbol in local else 1.0)
+            bars = [(d, store.on(base, d) * k, store.on(base, d) * k) for d in store._dates[base] if d >= start]
+            level = bars[-1][1]
+            for d in (thu, fri, mon):
+                level *= (seoul if symbol in local else moves)[d]
+                if d in (seoul_known if symbol in local else known_days):
+                    bars.append((d, level, level))
+            return bars
+        return fetch
+
+    def job(now, known_days, seoul_known):
+        current = prices.load_prices(data)
+        need = cli.tickers_to_update(engine.plan(calls, current.sessions()), current, "SPY")
+        added = prices.update_live(data, need, now, vendor(known_days, seoul_known), published_through=cli.last_published(out))
+        current = prices.load_prices(data)
+        built = cli.build(calls, current, cfg, now)
+        cli.publish(out, cfg, built, current, len(calls), now_utc=now)
+        return added, built["daily"]["allin_12m"].filter(pl.col("mode") == "paper")
+
+    job(dt.datetime(2026, 11, 20, 1, 7, tzinfo=UTC), {thu}, {thu})
+    added, paper = job(dt.datetime(2026, 11, 21, 1, 7, tzinfo=UTC), {thu, fri}, {thu})          # Friday's Seoul bars are not in the vendor's history yet
+    assert paper["date"].to_list() == [thu, fri] and not [r for r in added if r[1] in local.values()]
+    friday_pnl = paper["pnl"][1]
+    added, paper = job(dt.datetime(2026, 11, 21, 7, 7, tzinfo=UTC), {thu, fri}, {thu, fri})     # now they are: too late for Friday
+    assert added == [] and paper["pnl"][1] == friday_pnl
+    assert prices.load_prices(data).on("SKH-USD", fri) is None
+    added, paper = job(dt.datetime(2026, 11, 24, 1, 7, tzinfo=UTC), {thu, fri, mon}, {thu, fri, mon})
+    assert paper["date"].to_list() == [thu, fri, mon] and paper["pnl"][1] == friday_pnl
+    after = prices.load_prices(data)
+    assert after.on("SKH-USD", mon) == pytest.approx(after.on("SKH-USD", thu) * 1.05 * 0.99)   # the level is right again; Friday's move lands on Monday
+
+
+def test_a_call_cannot_be_slipped_onto_a_published_day(tmp_path, calls, store, cfg):
+    now = dt.datetime(2026, 11, 19, 7, 0, tzinfo=UTC); out = str(tmp_path / "results")
+    built = cli.build(calls, store, cfg, now)
+    cli.publish(out, cfg, built, store, len(calls), now_utc=now)
+    late = make_call(published="2026-11-16T15:00:00Z", recorded="2026-11-17T20:00:00Z", legs="SPY:1")    # typed in afterwards: enters at the last published close
+    assert engine.plan([late], store.sessions())[0].entry == FROZEN_THROUGH
+    changed = cli.build([*calls, late], store, cfg, now)
+    contract.check_append_only(built["daily"]["allin_12m"], changed["daily"]["allin_12m"])              # that day's PnL is untouched, so this alone sees nothing
+    with pytest.raises(RuntimeError, match="trades or capital"):
+        cli.publish(out, cfg, changed, store, len(calls) + 1, now_utc=now)
+    cli.publish(out, cfg, changed, store, len(calls) + 1, now_utc=now, allow_restate=True)
 
 
 def test_command_line_run(tmp_path):

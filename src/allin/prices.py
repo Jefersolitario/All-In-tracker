@@ -147,8 +147,14 @@ def _chain(stored_dates, stored_vals, bars, cutoff, ticker, tol=0.02):
     return [(d, stored_vals[-1] * a / adj[last]) for d, a in sorted(adj.items()) if last < d <= cutoff]
 
 
-def update_live(data_dir: str | pathlib.Path, tickers: list[str], now_utc: dt.datetime | None = None, fetch=yahoo_history) -> list[tuple[dt.date, str, float]]:
-    """Append final daily levels for `tickers` to the live file. Returns the rows added."""
+def update_live(data_dir: str | pathlib.Path, tickers: list[str], now_utc: dt.datetime | None = None, fetch=yahoo_history,
+                published_through: dt.date | None = None) -> list[tuple[dt.date, str, float]]:
+    """Append final daily levels for `tickers` to the live file. Returns the rows added.
+
+    A bar dated on or before `published_through` is never stored: that day has been published without it, and a price
+    that turns up late (a foreign bar the vendor had not posted yet) would change a published day. The next bar chains
+    over the gap, so the level stays right and the missed move is recognised one bar later.
+    """
     now_utc = now_utc or dt.datetime.now(dt.timezone.utc)
     d = pathlib.Path(data_dir); prices = load_prices(d); added: list[tuple[dt.date, str, float]] = []
     for t in sorted(set(tickers)):
@@ -169,7 +175,8 @@ def update_live(data_dir: str | pathlib.Path, tickers: list[str], now_utc: dt.da
         else:
             bars = fetch(t, start); cutoff = final_through(t, now_utc)
         for day, level in _chain(dates, vals, bars, cutoff, t):
-            added.append((day, t, level))
+            if published_through is None or day > published_through:
+                added.append((day, t, level))
     if added:
         live = d / LIVE; new_file = not live.exists()
         with live.open("a", encoding="utf-8", newline="") as f:

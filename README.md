@@ -80,7 +80,7 @@ A scheduled Claude session reads new episodes twice a day and opens a pull reque
 
 ```
 pip install -e ".[dev]"
-pytest -q                         # 31 tests
+pytest -q                         # 36 tests
 python -m allin.cli status        # the book as it stands: what is held, since when, until when
 python -m allin.cli run           # recompute and write ./results from stored prices
 python -m allin.cli run --fetch   # the same after appending the latest final prices

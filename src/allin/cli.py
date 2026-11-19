@@ -15,6 +15,7 @@ import csv
 import datetime as dt
 import hashlib
 import io
+import json
 import math
 import pathlib
 import tomllib
@@ -112,6 +113,25 @@ def publishable_through(positions: list[engine.Position], store: prices.Prices, 
     return max(d for d in store.sessions() if d <= min(done, final))
 
 
+def last_published(out: str) -> dt.date | None:
+    """The last day already published under a results root, or None when nothing is there yet."""
+    raw = contract.read_bytes("/".join([out.rstrip("/"), "index.json"]))
+    day = json.loads(raw).get("data_through") if raw else None
+    return dt.date.fromisoformat(day) if day else None
+
+
+def check_book_unchanged(old: pl.DataFrame | None, new: pl.DataFrame, tol: float = 0.01) -> None:
+    """A call cannot join or leave on a day that is already published. The shared contract check compares PnL only,
+    and a call slipped in at a published close leaves that day's PnL untouched, so trades and capital are compared too."""
+    if old is None or old.height == 0:
+        return
+    j = old.select("date", pl.col("n_trades").alias("n_old"), pl.col("capital").alias("cap_old")).join(new, on="date", how="inner")
+    bad = j.filter((pl.col("n_trades") != pl.col("n_old")) | ((pl.col("capital") - pl.col("cap_old")).abs() > tol))
+    if bad.height:
+        raise RuntimeError(f"{bad.height} published days would change in trades or capital, first {bad['date'][0]}. "
+                           "A call cannot enter or leave on a published day. Re-run with --allow-restate only if this is intended.")
+
+
 def daily_table(res: engine.Result, mode: str) -> pl.DataFrame:
     pnl = [0.0] + [res.equity[i] - res.equity[i - 1] for i in range(1, len(res.equity))]
     capital = [e if n else 0.0 for e, n in zip(res.equity, res.n_active)]
@@ -157,8 +177,8 @@ def summary_row(sid: str, name: str, role: str, paper: bool, res: engine.Result,
     s = engine.stats(res.equity, DAYS_PER_YEAR, bill_returns(bills, res.dates))
     end = res.dates[-1]
     entered = [p for p in res.positions.values() if p.entry <= end]
-    closed = [p for p in entered if p.exit is not None and p.exit <= end]
-    wins = sum(1 for p in closed if engine.call_value(p.call, p.entry, p.exit, store) > 1)
+    closed = [p for p in entered if (p.exit is not None and p.exit <= end) or p.call.call_id in res.wiped]
+    wins = sum(1 for p in closed if p.call.call_id not in res.wiped and engine.call_value(p.call, p.entry, p.exit, store) > 1)
     return {"strategy_id": sid, "name": name, "paper_traded": paper, "role": role, "start": res.dates[0], "end": end, "buys": len(entered), "put_in": start_cash,
             "pnl": s["pnl"], "return_pct": s["return_pct"], "sharpe": s["sharpe"], "sortino": s["sortino"], "max_dd": s["max_dd"],
             "sharpe_per_dollar": s["sharpe_per_dollar"], "placebo_p": None, "sharpe_vs_bills": s.get("sharpe_vs_bills"), "max_dd_pct": s["max_dd_pct"],
@@ -226,6 +246,8 @@ def publish(out: str, cfg: dict, built: dict, store: prices.Prices, n_calls: int
         manifest = {"id": s["id"], "name": s["name"], "market": "US-listed stocks and ETFs, with some crypto and foreign shares", "currency": "USD",
                     "days_per_year": DAYS_PER_YEAR, "backtest_start": cfg["backtest_start"], "paper_start": cfg["paper_start"], "description": s.get("description", ""),
                     "start_cash_usd": cfg["start_cash"], "code_version": code, "ledger_version": ledger, "calls_in_ledger": n_calls, "source_repo": cfg["source"], "role": s["role"]}
+        if not allow_restate:
+            check_book_unchanged(contract.read_parquet("/".join([out.rstrip("/"), s["id"], "daily.parquet"])), built["daily"][s["id"]])
         contract.publish_strategy(out, manifest, built["daily"][s["id"]], allow_restate=allow_restate)
         book, res = built["books"][s["id"]]
         contract.write_bytes("/".join([out.rstrip("/"), s["id"], "positions.csv"]), positions_csv(res, book, store))
@@ -281,10 +303,12 @@ def main(argv: list[str] | None = None) -> int:
     calls = [c for c in ledger if not is_pending(c, cfg)]
     store = prices.load_prices(a.data)
     if a.cmd == "run" and a.fetch:
-        added = prices.update_live(a.data, tickers_to_update(engine.plan(calls, store.sessions()), store, cfg.get("benchmark", "SPY")), now)
+        added = prices.update_live(a.data, tickers_to_update(engine.plan(calls, store.sessions()), store, cfg.get("benchmark", "SPY")), now,
+                                   published_through=last_published(a.out))
         print(f"prices: {len(added)} rows added" + (f", through {max(d for d, _, _ in added)}" if added else ""))
         store = prices.load_prices(a.data)
-        behind = [d for d in store.sessions() if d > publishable_through(engine.plan(calls, store.sessions()), store, now)]
+        through = publishable_through(engine.plan(calls, store.sessions()), store, now)
+        behind = [d for d in store.sessions() if d > through]
         if len(behind) > 3:
             raise RuntimeError(f"{len(behind)} sessions cannot be published because a held ticker has no price: first {behind[0]}. "
                                "Fix the price source, or close the call with forced_exit if the ticker stopped trading.")

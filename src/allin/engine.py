@@ -10,6 +10,9 @@ from .ledger import Call, entry_date, exit_date
 from .prices import Prices, us_listed
 
 
+MAX_STALE_DAYS = 10     # a leg is valued with its latest price up to this many days old: weekends, and holidays abroad
+
+
 @dataclasses.dataclass(frozen=True)
 class Position:
     call: Call
@@ -27,6 +30,7 @@ class Result:
     holdings: dict[int, float]              # call id -> dollars at the last close
     positions: dict[int, Position]
     call_pnl: list[dict[int, float]] = dataclasses.field(default_factory=list)   # per date: call id -> dollars made that day
+    wiped: dict[int, dt.date] = dataclasses.field(default_factory=dict)          # calls that lost everything, and the day they were closed at nothing
 
 
 def plan(calls: list[Call], sessions: list[dt.date], not_before: dt.date | None = None) -> list[Position]:
@@ -50,15 +54,18 @@ def plan(calls: list[Call], sessions: list[dt.date], not_before: dt.date | None 
             entry = sessions[i] if i < len(sessions) else None
             if leave is not None and leave <= (entry or not_before):
                 continue
+        if leave is not None and entry is not None and leave <= entry:
+            continue                                   # a forced exit on or before the entry: the call is never held
         out.append(Position(c, rule, entry, leave))
     return out
 
 
 def call_value(call: Call, entry: dt.date, day: dt.date, prices: Prices) -> float | None:
-    """Value on `day` of one dollar put into the call at the entry close; legs are bought once and held."""
+    """Value on `day` of one dollar put into the call at the entry close; legs are bought once and held.
+    Can fall to zero or below when a short leg more than doubles; the portfolio closes the call at nothing when it does."""
     v = 1.0
     for ticker, w in call.legs:
-        a = prices.asof(ticker, entry, 4); b = prices.asof(ticker, day)
+        a = prices.asof(ticker, entry, MAX_STALE_DAYS); b = prices.asof(ticker, day, MAX_STALE_DAYS)
         if a is None or b is None:
             return None
         v += w * (b / a - 1)
@@ -97,11 +104,15 @@ def simulate(positions: list[Position], prices: Prices, start_cash: float = 10_0
                 v = call_value(pos[k].call, pos[k].entry, d, prices)
                 if v is None:
                     raise RuntimeError(f"call {k} cannot be valued on {d}")
+                v = max(v, 0.0)
                 made[k] = hold[k] * (v / last_value[k] - 1)
                 hold[k] += made[k]; last_value[k] = v
         equity = cash + sum(hold.values())
-        ending = [k for k in hold if pos[k].exit == d]
-        starting = [k for k, p in pos.items() if p.entry == d]
+        for k in hold:
+            if last_value[k] <= 0.0:                   # lost its whole stake: closed here at nothing, the rest carries on
+                out.wiped[k] = d
+        ending = [k for k in hold if pos[k].exit == d or k in out.wiped]
+        starting = [k for k, p in pos.items() if p.entry == d and k not in out.wiped]
         if ending or starting:
             keep = [k for k in hold if k not in ending] + starting
             hold = {k: equity / len(keep) for k in keep}; cash = 0.0 if keep else equity
