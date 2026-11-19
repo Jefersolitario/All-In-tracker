@@ -65,23 +65,51 @@ def parse_legs(text: str) -> tuple[tuple[str, float], ...]:
 
 def load_calls(path: str | pathlib.Path) -> list[Call]:
     with open(path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    if rows and tuple(rows[0].keys()) != COLUMNS:
+        rows = list(csv.reader(f))
+    if not rows or tuple(rows[0]) != COLUMNS:
         raise ValueError(f"calls file must have the columns {COLUMNS}")
     calls = []
-    for r in rows:
+    for n, row in enumerate(rows[1:], start=2):
+        if not any(x.strip() for x in row):
+            continue                                                  # a blank line
+        if len(row) != len(COLUMNS):
+            raise ValueError(f"calls file line {n}: expected {len(COLUMNS)} fields, found {len(row)} (a comma inside a field needs double quotes)")
+        r = dict(zip(COLUMNS, row))
+        try:
+            call_id = int(r["call_id"])
+        except ValueError:
+            raise ValueError(f"calls file line {n}: call_id {r['call_id']!r} is not a whole number") from None
         if r["status"] not in ("active", "excluded"):
-            raise ValueError(f"call {r['call_id']}: status must be active or excluded")
+            raise ValueError(f"call {call_id}: status must be active or excluded")
         published = _ts(r["published_utc"])
         if published is None:
-            raise ValueError(f"call {r['call_id']}: published_utc is required")
+            raise ValueError(f"call {call_id}: published_utc is required")
         rec = r["recovered_return_pct"].strip(); forced = r["forced_exit"].strip()
-        calls.append(Call(int(r["call_id"]), r["episode_guid"], published, r["speaker"], r["call"], parse_legs(r["legs"]), r["status"],
+        calls.append(Call(call_id, r["episode_guid"], published, r["speaker"], r["call"], parse_legs(r["legs"]), r["status"],
                           _ts(r["recorded_utc"]), float(rec) if rec else None, dt.date.fromisoformat(forced) if forced else None, r["note"]))
     ids = [c.call_id for c in calls]
     if len(set(ids)) != len(ids):
         raise ValueError("call ids must be unique")
     return sorted(calls, key=lambda c: (c.published_utc, c.call_id))
+
+
+def field_spans(line: str) -> list[tuple[int, int]]:
+    """Start and end of every comma-separated field in one line of CSV (without its line ending), honouring double quotes."""
+    spans, start, quoted, i = [], 0, False, 0
+    while i < len(line):
+        ch = line[i]
+        if ch == '"':
+            if quoted and line[i + 1:i + 2] == '"':
+                i += 1                                                # an escaped quote inside a quoted field
+            else:
+                quoted = not quoted
+        elif ch == "," and not quoted:
+            spans.append((start, i)); start = i + 1
+        i += 1
+    if quoted:
+        raise ValueError("a quoted field is not closed on its line; keep each call on one line")
+    spans.append((start, len(line)))
+    return spans
 
 
 def plus_year(d: dt.date) -> dt.date:

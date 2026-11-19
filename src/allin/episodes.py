@@ -23,38 +23,54 @@ def fetch_feed(url: str = FEED) -> bytes:
 
 
 def parse_feed(xml: bytes) -> list[tuple[str, str, str, str, str]]:
-    """Catalogue rows from an RSS document, oldest first."""
-    lowered = xml.lower()
-    if b"<!doctype" in lowered or b"<!entity" in lowered:
+    """Catalogue rows from an RSS document, oldest first. An item that cannot be read is skipped and reported; the rest are kept."""
+    try:
+        text = xml.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise ValueError("the feed is not UTF-8; refusing to parse it") from None
+    root_at = text.find("<rss")
+    prolog = text[:root_at if root_at >= 0 else 2000].lower()
+    if "<!doctype" in prolog or "<!entity" in prolog:
         raise ValueError("the feed declares a document type or entities; refusing to parse it")
-    rows = []
-    for item in ET.fromstring(xml).findall("./channel/item"):
+    rows, seen = [], set()
+    for item in ET.fromstring(text.encode("utf-8")).findall("./channel/item"):
         guid = (item.findtext("guid") or "").strip()
         title = " ".join((item.findtext("title") or "").split())
         stamp = (item.findtext("pubDate") or "").strip()
-        if not (guid and title and stamp):
-            raise ValueError("an episode in the feed is missing its identity, title or timestamp")
-        when = parsedate_to_datetime(stamp)
-        if when.tzinfo is None:
-            raise ValueError(f"episode {guid}: the release time has no time zone")
+        try:
+            if not (guid and title and stamp):
+                raise ValueError("no identity, title or timestamp")
+            when = parsedate_to_datetime(stamp)
+            if when.tzinfo is None:
+                raise ValueError("the release time has no time zone")
+            if guid in seen:
+                raise ValueError("the same identity appears twice")
+        except (ValueError, TypeError) as e:
+            print(f"feed item skipped ({guid or title or 'unnamed'}): {e}")
+            continue
+        seen.add(guid)
         enclosure = item.find("enclosure")
         rows.append((when.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), guid, title, (item.findtext("link") or "").strip(),
                      enclosure.attrib.get("url", "") if enclosure is not None else ""))
-    if not rows or len({r[1] for r in rows}) != len(rows):
-        raise ValueError("empty feed or duplicate episode identity")
+    if not rows:
+        raise ValueError("the feed has no readable episode")
     return sorted(rows)
 
 
 def update_catalogue(path: str | pathlib.Path, feed_rows: list[tuple[str, str, str, str, str]]) -> list[tuple[str, str, str, str, str]]:
-    """Append the episodes the catalogue does not know yet. Returns the rows added."""
+    """Append the episodes the catalogue does not know yet. Returns the rows added. Stored rows are never rewritten:
+    an episode keeps the title and time it had when it was first seen."""
     with open(path, newline="", encoding="utf-8") as f:
-        stored = list(csv.reader(f))
+        text = f.read()
+    stored = list(csv.reader(text.splitlines()))
     if not stored or tuple(stored[0]) != COLUMNS:
         raise ValueError(f"the catalogue must have the columns {COLUMNS}")
-    known = {r[1] for r in stored[1:]}
+    known = {r[1].strip() for r in stored[1:] if len(r) > 1}
     new = [r for r in feed_rows if r[1] not in known]
     if new:
         with open(path, "a", newline="", encoding="utf-8") as f:
+            if text and not text.endswith("\n"):
+                f.write("\n")                                       # or the first new row would be glued to the last stored one
             csv.writer(f, lineterminator="\n").writerows(new)
     return new
 

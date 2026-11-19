@@ -80,7 +80,7 @@ A sale or an exit announced on air is not a call and does not close anything: th
 | `call` | A few words, for example `Uranium miners` |
 | `legs` | `TICKER:weight` pairs separated by `;`, absolute weights summing to 1 |
 | `status` | `active` |
-| `recorded_utc` | **Leave empty.** The daily job fills it in when the line reaches `main`. |
+| `recorded_utc` | **Leave empty.** The daily job fills it in when the line reaches `main`. A line that arrives with it filled in fails the tests on the pull request. |
 | `recovered_return_pct`, `forced_exit` | Empty |
 | `note` | Where in the episode, a one-sentence paraphrase, the proxy if one was used, and how sure the speaker is |
 

@@ -72,24 +72,30 @@ def call_value(call: Call, entry: dt.date, day: dt.date, prices: Prices) -> floa
     return v
 
 
-def complete_through(positions: list[Position], prices: Prices) -> dt.date:
-    """Last session on which every open position can be valued for good.
+def incomplete_legs(positions: list[Position], prices: Prices, d: dt.date) -> list[str]:
+    """Tickers held on session `d` that cannot be valued for good on it yet.
 
     A US symbol or a cryptocurrency needs its own price for that day. A dollar series built from a foreign listing is
-    carried at its last close for up to MAX_STALE_DAYS, and so is any leg of a call with a forced exit: its ticker may
-    have stopped trading, and the call is closed at the last price it had.
+    carried at its last close for up to MAX_STALE_DAYS. So is any leg of a call in the last days before its forced
+    exit: the ticker may have stopped trading, and the call is closed at the last price it had.
     """
-    sessions = prices.sessions()
-    for d in reversed(sessions):
-        ok = True
-        for p in positions:
-            if p.entry is None or p.entry > d or (p.exit is not None and p.exit < d):
-                continue
-            for ticker, _ in p.call.legs:
-                own = needs_own_day(ticker) and p.call.forced_exit is None
-                if (own and prices.on(ticker, d) is None) or prices.asof(ticker, d, MAX_STALE_DAYS) is None:
-                    ok = False
-        if ok:
+    out = []
+    for p in positions:
+        if p.entry is None or p.entry > d or (p.exit is not None and p.exit < d):
+            continue
+        carried = p.call.forced_exit is not None and (p.call.forced_exit - d).days <= MAX_STALE_DAYS
+        for ticker, _ in p.call.legs:
+            own = needs_own_day(ticker) and not carried
+            if (own and prices.on(ticker, d) is None) or prices.asof(ticker, d, MAX_STALE_DAYS) is None:
+                out.append(ticker)
+    return sorted(set(out))
+
+
+def complete_through(positions: list[Position], prices: Prices) -> dt.date:
+    """Last session on which every open position can be valued for good. An earlier session that lacks a bar is not
+    waited for once a later one is complete: its legs are carried for that day and the move lands in the next one."""
+    for d in reversed(prices.sessions()):
+        if not incomplete_legs(positions, prices, d):
             return d
     raise RuntimeError("no session on which all positions can be valued")
 
@@ -135,7 +141,7 @@ def simulate(positions: list[Position], prices: Prices, start_cash: float = 10_0
 def stats(equity: list[float], days_per_year: int = 252, rf_daily: list[float] | None = None) -> dict:
     """Dollar statistics in the dashboard's convention, plus return-based ones for comparison with the recovered table."""
     pnl = [equity[i] - equity[i - 1] for i in range(1, len(equity))]
-    ret = [equity[i] / equity[i - 1] - 1 for i in range(1, len(equity))]
+    ret = [equity[i] / equity[i - 1] - 1 if equity[i - 1] > 0 else 0.0 for i in range(1, len(equity))]     # a book that lost everything stays at zero
     n = len(pnl)
 
     def sharpe(x):

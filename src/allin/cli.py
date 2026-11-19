@@ -4,7 +4,7 @@
     python -m allin.cli run --fetch         first append the latest final daily prices
     python -m allin.cli run --out gs://bucket/all-in-tracker      publish somewhere else (needs gcsfs)
     python -m allin.cli status              print the book as it stands: what is held, since when, until when
-    python -m allin.cli stamp               give new calls the time they reached the ledger (the scheduled job does this)
+    python -m allin.cli stamp               give new calls the time they reached the ledger (only the scheduled job runs this)
     python -m allin.cli episodes            append newly published episodes to data/episodes.csv from the publisher's feed
 """
 from __future__ import annotations
@@ -17,16 +17,20 @@ import hashlib
 import io
 import json
 import math
+import os
 import pathlib
+import re
 import tomllib
 
 import polars as pl
 
 from . import contract, engine, episodes, prices
-from .ledger import Call, load_calls, plus_year
+from .ledger import COLUMNS, Call, field_spans, load_calls, plus_year
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DAYS_PER_YEAR = 252
+STAMPS = "stamps.csv"                      # in the data folder: which call the scheduled job stamped, and when
+STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 FILTERS = {"all": lambda c: True, "hosts": lambda c: c.host_only, "guests": lambda c: not c.host_only}
 
 
@@ -73,45 +77,92 @@ def check_ledger(calls: list[Call], cfg: dict, now_utc: dt.datetime) -> None:
             raise ValueError(f"call {c.call_id}: recorded before the episode was published")
 
 
-def stamp_calls(path: str | pathlib.Path, cfg: dict, now_utc: dt.datetime) -> list[int]:
-    """Write the current time into `recorded_utc` of every new call that has none. Returns the ids stamped.
+def load_stamps(path: str | pathlib.Path) -> dict[int, str]:
+    """The stamps the scheduled job has written, by call id. A call stamped twice keeps the later line."""
+    path = pathlib.Path(path)
+    if not path.exists():
+        return {}
+    with path.open(newline="", encoding="utf-8") as f:
+        return {int(r["call_id"]): r["recorded_utc"] for r in csv.DictReader(f)}
+
+
+def check_stamps(calls: list[Call], cfg: dict, stamps: dict[int, str]) -> None:
+    """Every stamp on a new call must be the one the scheduled job wrote.
+
+    A call is bought at the close of the first session after its stamp. The job writes the stamp when the line reaches
+    `main`, so that close is always still to come. A stamp typed by hand, or changed afterwards, can point at a close
+    that is already known, and nothing else in the pipeline could tell the difference.
+    """
+    for c in calls:
+        if c.status == "active" and c.call_id > cfg["recovered_calls_through"] and c.recorded_utc is not None:
+            if stamps.get(c.call_id) != c.recorded_utc.strftime(STAMP_FORMAT):
+                raise ValueError(f"call {c.call_id}: its recorded_utc was not written by the scheduled job ({STAMPS} has {stamps.get(c.call_id) or 'no line for it'}). "
+                                 "Empty the field and the job stamps the call at its next run.")
+
+
+def stamp_calls(path: str | pathlib.Path, cfg: dict, now_utc: dt.datetime, log_path: str | pathlib.Path) -> list[int]:
+    """Write the current time into `recorded_utc` of every new call that has none, and note it in the stamp log.
+    Returns the ids stamped.
 
     A call is bought at the close of the first session after its stamp, so the stamp has to be the moment the line
     became part of the live ledger. The scheduled job runs this on `main`; nothing else should fill the field in.
-    Every other byte of the file is left as it was.
+    Only the empty field is filled: every other byte of the file, line endings and quoting included, stays as it was.
     """
-    with open(path, newline="", encoding="utf-8") as f:
-        rows = list(csv.reader(f))
-    header = rows[0]
-    i_id, i_status, i_rec = header.index("call_id"), header.index("status"), header.index("recorded_utc")
-    done = []
-    for r in rows[1:]:
-        if int(r[i_id]) > cfg["recovered_calls_through"] and r[i_status] == "active" and not r[i_rec].strip():
-            r[i_rec] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"); done.append(int(r[i_id]))
+    path = pathlib.Path(path)
+    lines = re.findall(r"[^\n]*\n|[^\n]+$", path.read_bytes().decode("utf-8"))
+    if not lines or tuple(next(csv.reader([lines[0].rstrip("\r\n")]), ())) != COLUMNS:
+        raise ValueError(f"{path.name} does not start with the expected header line")
+    i_id, i_status, i_rec = COLUMNS.index("call_id"), COLUMNS.index("status"), COLUMNS.index("recorded_utc")
+    stamp, done = now_utc.strftime(STAMP_FORMAT), []
+    for n in range(1, len(lines)):
+        body = lines[n].rstrip("\r\n"); ending = lines[n][len(body):]
+        if not body.strip():
+            continue                                                  # a blank line
+        try:
+            spans = field_spans(body)
+        except ValueError as e:
+            raise ValueError(f"{path.name} line {n + 1}: {e}") from None
+        if len(spans) != len(COLUMNS):
+            raise ValueError(f"{path.name} line {n + 1}: expected {len(COLUMNS)} fields, found {len(spans)} (a comma inside a field needs double quotes)")
+        value = lambda i: next(csv.reader([body[spans[i][0]:spans[i][1]]]), [""])[0].strip() if body[spans[i][0]:spans[i][1]] else ""    # noqa: E731
+        try:
+            call_id = int(value(i_id))
+        except ValueError:
+            raise ValueError(f"{path.name} line {n + 1}: call_id is not a whole number") from None
+        if call_id > cfg["recovered_calls_through"] and value(i_status) == "active" and not value(i_rec):
+            lines[n] = body[:spans[i_rec][0]] + stamp + body[spans[i_rec][1]:] + ending
+            done.append(call_id)
     if done:
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            csv.writer(f, lineterminator="\n").writerows(rows)
+        log = pathlib.Path(log_path)
+        text = log.read_text(encoding="utf-8") if log.exists() else ""
+        with log.open("a", encoding="utf-8", newline="") as f:       # the log first: a line here without a stamp in the ledger is harmless
+            f.write("call_id,recorded_utc\n" if not text else "" if text.endswith("\n") else "\n")
+            f.writelines(f"{k},{stamp}\n" for k in done)
+        path.write_bytes("".join(lines).encode("utf-8"))
     return done
 
 
 def tickers_to_update(positions: list[engine.Position], store: prices.Prices, benchmark: str) -> tuple[list[str], set[str]]:
     """What the daily job downloads: the benchmark, and the legs of every call that is still open or has not entered yet.
-    Also returns the tickers that only calls with a forced exit need; a failed download of one of those is not an error."""
+    Also returns the tickers needed only by calls whose forced exit is at hand: such a ticker may have stopped trading,
+    so failing to download it is not an error."""
     last = store.sessions()[-1]
     always, normal, forced = {benchmark, prices.CALENDAR}, set(), set()
     for p in positions:
         legs = [t for t, _ in p.call.legs]
         if p.exit is None or p.exit > last or (p.exit == last and any(store.on(t, last) is None for t in legs)):
-            (forced if p.call.forced_exit is not None else normal).update(legs)
+            at_hand = p.call.forced_exit is not None and (p.call.forced_exit - last).days <= engine.MAX_STALE_DAYS
+            (forced if at_hand else normal).update(legs)
     return sorted(always | normal | forced), forced - normal - always
 
 
-def check_not_stalled(store: prices.Prices, through: dt.date, limit: int = 3) -> None:
+def check_not_stalled(store: prices.Prices, through: dt.date, positions: list[engine.Position] = (), limit: int = 3) -> None:
     """Fail when sessions pile up that cannot be published, which means a held ticker has stopped getting prices."""
     behind = [d for d in store.sessions() if d > through]
     if len(behind) > limit:
-        raise RuntimeError(f"{len(behind)} sessions cannot be published because a held ticker has no price: first {behind[0]}. "
-                           "Fix the price source, or give the call a forced_exit on that day if its ticker stopped trading.")
+        who = ", ".join(engine.incomplete_legs(list(positions), store, behind[0])) or "a held ticker"
+        raise RuntimeError(f"{len(behind)} sessions cannot be published: since {behind[0]} there is no price for {who}. "
+                           "If the vendor is late, the next run catches up. If the ticker stopped trading, give its call a forced_exit on that day.")
 
 
 def stale_legs(res: engine.Result, store: prices.Prices, days: int = 4) -> list[str]:
@@ -179,13 +230,13 @@ def bill_returns(bills: list[tuple[dt.date, float]], dates: list[dt.date]) -> li
 
 def market_fit(equity: list[float], bench: list[float]) -> dict:
     """Daily returns regressed on the benchmark's: beta, and what is left over (alpha) with its t statistic."""
-    y = [equity[i] / equity[i - 1] - 1 for i in range(1, len(equity))]
+    y = [equity[i] / equity[i - 1] - 1 if equity[i - 1] > 0 else 0.0 for i in range(1, len(equity))]
     x = [bench[i] / bench[i - 1] - 1 for i in range(1, len(bench))]
     n = len(y)
-    if n < 30:
-        return {"beta_spy": None, "alpha_pct_yr": None, "alpha_t": None}
-    mx, my = sum(x) / n, sum(y) / n
+    mx, my = (sum(x) / n, sum(y) / n) if n else (0.0, 0.0)
     sxx = sum((a - mx) ** 2 for a in x)
+    if n < 30 or sxx == 0:
+        return {"beta_spy": None, "alpha_pct_yr": None, "alpha_t": None}
     beta = sum((a - mx) * (b - my) for a, b in zip(x, y)) / sxx
     alpha = my - beta * mx
     s2 = sum((b - alpha - beta * a) ** 2 for a, b in zip(x, y)) / (n - 2)
@@ -215,7 +266,7 @@ def positions_csv(res: engine.Result, book: str, store: prices.Prices) -> bytes:
         p = res.positions[k]
         leaves = p.exit or (min(plus_year(p.rule_entry), p.call.forced_exit) if p.call.forced_exit else plus_year(p.rule_entry))
         w.writerow((end, book, k, p.call.speaker, p.call.call, ";".join(f"{t}:{x:g}" for t, x in p.call.legs), p.call.published_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    p.entry, leaves, f"{usd:.2f}", f"{100 * usd / total:.2f}", f"{100 * (engine.call_value(p.call, p.entry, end, store) - 1):.2f}"))
+                    p.entry, leaves, f"{usd:.2f}", f"{100 * usd / total:.2f}" if total > 0 else "0.00", f"{100 * (engine.call_value(p.call, p.entry, end, store) - 1):.2f}"))
     return buf.getvalue().encode()
 
 
@@ -271,7 +322,8 @@ def publish(out: str, cfg: dict, built: dict, store: prices.Prices, n_calls: int
             continue
         manifest = {"id": s["id"], "name": s["name"], "market": "US-listed stocks and ETFs, with some crypto and foreign shares", "currency": "USD",
                     "days_per_year": DAYS_PER_YEAR, "backtest_start": cfg["backtest_start"], "paper_start": cfg["paper_start"], "description": s.get("description", ""),
-                    "start_cash_usd": cfg["start_cash"], "code_version": code, "ledger_version": ledger, "calls_in_ledger": n_calls, "source_repo": cfg["source"], "role": s["role"]}
+                    "start_cash_usd": cfg["start_cash"], "code_version": code, "ledger_version": ledger, "calls_in_ledger": n_calls,
+                    "source_repo": cfg["source"], "role": s["role"]}
         if not allow_restate:
             check_book_unchanged(contract.read_parquet("/".join([out.rstrip("/"), s["id"], "daily.parquet"])), built["daily"][s["id"]])
         contract.publish_strategy(out, manifest, built["daily"][s["id"]], allow_restate=allow_restate)
@@ -293,7 +345,8 @@ def show(built: dict, store: prices.Prices) -> None:
               + (f" (paper PnL {paper['pnl'].sum():+,.2f} USD)" if paper.height else "") + f"; {book} book holds {len(res.holdings)} calls worth {sum(res.holdings.values()):,.2f} USD")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, now: dt.datetime | None = None, fetch=None) -> int:
+    """`now` and `fetch` stand in for the clock and the data vendor in tests."""
     ap = argparse.ArgumentParser(prog="allin")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, text in (("run", "recompute and publish"), ("status", "print the book without writing anything"),
@@ -306,12 +359,13 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--fetch", action="store_true", help="append the latest final daily prices first")
             p.add_argument("--out", default=str(ROOT / "results"), help="results root: a folder or any fsspec URI")
             p.add_argument("--allow-restate", action="store_true", help="permit changes to already published days")
-            p.add_argument("--allow-jump", default="", help="tickers, comma separated, whose one-day move beyond half or double is real")
+            p.add_argument("--allow-jump", default="", help="tickers, comma separated, whose vendor data is confirmed: a move beyond half or double, "
+                                                            "a currency move beyond 10%%, or a history that no longer matches what is stored")
         if name == "episodes":
             p.add_argument("--feed", default=episodes.FEED, help="feed address, or a saved copy of the feed")
     a = ap.parse_args(argv)
 
-    now = dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.timezone.utc)
     cfg = load_config(pathlib.Path(a.config))
     if a.cmd == "episodes":
         xml = pathlib.Path(a.feed).read_bytes() if pathlib.Path(a.feed).exists() else episodes.fetch_feed(a.feed)
@@ -320,23 +374,31 @@ def main(argv: list[str] | None = None) -> int:
             print(f"new episode: {row[0]} {row[2]}")
         print(f"catalogue: {len(added)} episodes added")
         return 0
+    stamp_log = pathlib.Path(a.data) / STAMPS
     if a.cmd == "stamp":
-        done = stamp_calls(a.calls, cfg, now)
-        check_ledger(load_calls(a.calls), cfg, now)
+        if os.environ.get("GITHUB_ACTIONS") != "true":
+            raise SystemExit("stamp is run by the scheduled job on main and nowhere else: a stamp written on another machine can enter a call "
+                             "at a close that is already known. Leave recorded_utc empty; the job fills it in.")
+        done = stamp_calls(a.calls, cfg, now, stamp_log)
+        stamped = load_calls(a.calls)
+        check_ledger(stamped, cfg, now)
+        check_stamps(stamped, cfg, load_stamps(stamp_log))
         print(f"stamped calls {done} at {now:%Y-%m-%dT%H:%M:%SZ}" if done else "no call is waiting for a stamp")
         return 0
     ledger = load_calls(a.calls)
     check_ledger(ledger, cfg, now)
+    check_stamps(ledger, cfg, load_stamps(stamp_log))
     waiting = [c for c in ledger if is_pending(c, cfg)]
     calls = [c for c in ledger if not is_pending(c, cfg)]
     store = prices.load_prices(a.data)
     if a.cmd == "run" and a.fetch:
         need, optional = tickers_to_update(engine.plan(calls, store.sessions()), store, cfg.get("benchmark", "SPY"))
-        added = prices.update_live(a.data, need, now, published_through=last_published(a.out), optional=optional,
+        added = prices.update_live(a.data, need, now, fetch or prices.yahoo_history, published_through=last_published(a.out), optional=optional,
                                    allow_jump={t.strip() for t in a.allow_jump.split(",") if t.strip()})
         print(f"prices: {len(added)} rows added" + (f", through {max(d for d, _, _ in added)}" if added else ""))
         store = prices.load_prices(a.data)
-        check_not_stalled(store, publishable_through(engine.plan(calls, store.sessions()), store, now))
+        plan = engine.plan(calls, store.sessions())
+        check_not_stalled(store, publishable_through(plan, store, now), plan)
     built = build(calls, store, cfg, now, load_bills(a.data))
     if a.cmd == "run":
         publish(a.out, cfg, built, store, len(ledger), allow_restate=a.allow_restate, now_utc=now, calls_path=a.calls, config_path=a.config)

@@ -6,6 +6,7 @@ import gzip
 import json
 import pathlib
 import shutil
+import statistics
 
 import polars as pl
 import pytest
@@ -52,6 +53,16 @@ def backtest_ledger_text(cfg):
     """calls.csv as it was when the backtest ledger was complete: the header and the calls up to the last backtest id."""
     lines = (ROOT / "calls.csv").read_text(encoding="utf-8").splitlines(keepends=True)
     return "".join(lines[:1 + cfg["recovered_calls_through"]])
+
+
+def clock():
+    """The real clock, as the job uses it. Only if the committed results carry a later time (a rehearsal of days to come) is
+    that time used instead, so that the ledger is never ahead of the clock."""
+    index = ROOT / "results" / "index.json"
+    times = [dt.datetime.now(UTC)]
+    if index.exists():
+        times.append(dt.datetime.fromisoformat(json.loads(index.read_text())["updated_utc"].replace("Z", "+00:00")))
+    return max(times)
 
 
 def make_call(call_id=900, published="2026-10-12T15:49:00Z", legs="SPY:1", recorded="", forced="", speaker="Jason", status="active"):
@@ -133,23 +144,96 @@ def test_a_new_call_is_on_file_but_not_traded_until_it_is_stamped(calls, cfg):
 
 
 def test_stamping_fills_only_new_empty_lines_and_changes_nothing_else(tmp_path, cfg, backtest_ledger_text):
-    path = tmp_path / "calls.csv"
+    path = tmp_path / "calls.csv"; log = tmp_path / "stamps.csv"
     original = backtest_ledger_text
     extra = ("50,guid-a,2026-11-21T02:35:00Z,Friedberg,Uranium,URA:1,active,,,,\"Says he is buying; a note, with a comma.\"\n"
              "51,guid-b,2026-11-21T02:35:00Z,Jason,Something private,SPY:1,excluded,,,,\n"
              "52,guid-c,2026-11-23T20:00:00Z,Chamath,Copper,CPER:1,active,2026-11-24T05:00:00Z,,,\n")
     path.write_text(original + extra, encoding="utf-8")
     when = dt.datetime(2026, 11, 22, 8, 15, 30, tzinfo=UTC)                        # Sunday morning in Dubai, still Sunday in New York
-    assert cli.stamp_calls(path, cfg, when) == [50]
+    assert cli.stamp_calls(path, cfg, when, log) == [50]
     after = path.read_text(encoding="utf-8")
     assert after == original + extra.replace("URA:1,active,,", "URA:1,active,2026-11-22T08:15:30Z,")
-    assert cli.stamp_calls(path, cfg, when + dt.timedelta(days=1)) == []          # a stamp is never moved
-    assert path.read_text(encoding="utf-8") == after
+    assert log.read_text() == "call_id,recorded_utc\n50,2026-11-22T08:15:30Z\n"   # the job notes what it stamped
+    assert cli.stamp_calls(path, cfg, when + dt.timedelta(days=1), log) == []     # a stamp is never moved
+    assert path.read_text(encoding="utf-8") == after and len(log.read_text().splitlines()) == 2
     stamped = {c.call_id: c for c in ledger.load_calls(path)}
     sessions = weekdays(dt.date(2026, 11, 16), 15)
     assert ledger.entry_date(stamped[50], sessions) == dt.date(2026, 11, 23)       # merged on the weekend: bought at Monday's close
     assert ledger.entry_date(stamped[52], sessions) == dt.date(2026, 11, 25)       # stamped just after midnight New York time on Tuesday: Wednesday
     assert stamped[46].recorded_utc is None                                        # the backtest ledger is left alone
+    # the stamp the job wrote is accepted; one typed by hand, or moved afterwards, is not
+    cli.check_stamps([c for c in stamped.values() if c.call_id != 52], cfg, cli.load_stamps(log))
+    with pytest.raises(ValueError, match="call 52: its recorded_utc was not written by the scheduled job .*no line for it"):
+        cli.check_stamps(list(stamped.values()), cfg, cli.load_stamps(log))
+    moved = dataclasses.replace(stamped[50], recorded_utc=stamped[50].recorded_utc - dt.timedelta(days=2))
+    with pytest.raises(ValueError, match="call 50: .*stamps.csv has 2026-11-22T08:15:30Z"):
+        cli.check_stamps([moved], cfg, cli.load_stamps(log))
+    path.write_text(after.replace("2026-11-22T08:15:30Z", ""), encoding="utf-8")   # emptied, as that message asks: the next stamp is the one that counts
+    assert cli.stamp_calls(path, cfg, when + dt.timedelta(days=2), log) == [50]
+    cli.check_stamps([c for c in ledger.load_calls(path) if c.call_id == 50], cfg, cli.load_stamps(log))
+    assert log.read_text().splitlines() == ["call_id,recorded_utc", "50,2026-11-22T08:15:30Z", "50,2026-11-24T08:15:30Z"]
+
+
+def test_stamping_touches_nothing_but_the_empty_field(tmp_path, cfg):
+    header = ",".join(ledger.COLUMNS)
+    raw = (header + "\r\n"
+           '50,g,2026-11-21T02:35:00Z,"Friedberg","Uranium, the ""real"" trade",URA:1,active,,,,"needless ""quotes"", kept"\r\n'
+           "\r\n"                                                                              # a blank line in the middle
+           '51,g,2026-11-21T02:35:00Z,Jason,Copper,CPER:1,active,"",,,no line ending after this one')
+    path = tmp_path / "calls.csv"; path.write_bytes(raw.encode("utf-8"))
+    log = tmp_path / "stamps.csv"; log.write_text("call_id,recorded_utc\n7,2026-01-01T00:00:00Z")      # a log whose last line has no line ending
+    assert cli.stamp_calls(path, dict(cfg, recovered_calls_through=49), dt.datetime(2026, 11, 22, 8, 0, tzinfo=UTC), log) == [50, 51]
+    assert cli.load_stamps(log) == {7: "2026-01-01T00:00:00Z", 50: "2026-11-22T08:00:00Z", 51: "2026-11-22T08:00:00Z"}
+    assert path.read_bytes().decode("utf-8") == raw.replace("URA:1,active,,", "URA:1,active,2026-11-22T08:00:00Z,").replace('CPER:1,active,"",', "CPER:1,active,2026-11-22T08:00:00Z,")
+    assert [c.call_id for c in ledger.load_calls(path)] == [50, 51]
+    for bad, message in ((header + "\nfifty,g,2026-11-21T02:35:00Z,J,C,SPY:1,active,,,,\n", "call_id is not a whole number"),
+                         (header + "\n50,g,2026-11-21T02:35:00Z,J,C,SPY:1,active,,,,a note, with a bare comma\n", "expected 11 fields, found 12"),
+                         (header + '\n50,g,2026-11-21T02:35:00Z,J,"C,SPY:1,active,,,,\n', "not closed on its line"),
+                         ("\ufeff" + header + "\n", "expected header line")):
+        path.write_bytes(bad.encode("utf-8"))
+        with pytest.raises(ValueError, match=message):
+            cli.stamp_calls(path, cfg, dt.datetime(2026, 11, 22, 8, 0, tzinfo=UTC), log)
+    path.write_text(header + "\n50,g,2026-11-21T02:35:00Z,J,C,SPY:1,active,,,,a note, with a bare comma\n")
+    with pytest.raises(ValueError, match="expected 11 fields, found 12"):                        # the loader no longer drops what follows the comma
+        ledger.load_calls(path)
+    path.write_text(header + "\n50,g,2026-11-21T02:35:00Z,J,C,SPY:1,active,,,,\n\n50,g,2026-11-21T02:35:00Z,J,C,SPY:1,active,,,,\n")
+    with pytest.raises(ValueError, match="unique"):
+        ledger.load_calls(path)
+
+
+def test_the_stamp_counts_in_new_york_time():
+    s = weekdays(dt.date(2026, 11, 16), 15)
+    late_evening = make_call(published="2026-11-23T20:00:00Z", recorded="2026-11-24T04:59:00Z")     # 23:59 on Monday in New York
+    after_midnight = make_call(published="2026-11-23T20:00:00Z", recorded="2026-11-24T05:00:00Z")   # 00:00 on Tuesday
+    assert ledger.entry_date(late_evening, s) == dt.date(2026, 11, 24) and ledger.entry_date(after_midnight, s) == dt.date(2026, 11, 25)
+    hosts = lambda who: make_call(speaker=who).host_only
+    assert hosts("Jason") and hosts("Jason / Sacks") and not hosts("Gerstner/Jason") and not hosts("Martin Shkreli")
+
+
+def test_only_the_scheduled_job_stamps_and_a_typed_stamp_stops_everything(tmp_path, monkeypatch, capsys, backtest_ledger_text):
+    data = tmp_path / "data"; data.mkdir(); shutil.copy(ROOT / "data" / prices.SNAPSHOT, data / prices.SNAPSHOT)
+    path = tmp_path / "calls.csv"
+    path.write_text(backtest_ledger_text + "50,guid-a,2026-11-17T15:00:00Z,Friedberg,Uranium,URA:1,active,,,,\n", encoding="utf-8")
+    args = ["--calls", str(path), "--data", str(data)]; now = dt.datetime(2026, 11, 19, 7, 0, tzinfo=UTC)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    with pytest.raises(SystemExit, match="scheduled job"):                         # on a laptop the stamp could be pushed days later
+        cli.main(["stamp", *args], now=now)
+    assert path.read_text(encoding="utf-8").endswith("URA:1,active,,,,\n") and not (data / cli.STAMPS).exists()
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    assert cli.main(["stamp", *args], now=now) == 0 and "stamped calls [50] at 2026-11-19T07:00:00Z" in capsys.readouterr().out
+    assert (data / cli.STAMPS).read_text() == "call_id,recorded_utc\n50,2026-11-19T07:00:00Z\n"
+    assert cli.main(["stamp", *args], now=now + dt.timedelta(hours=6)) == 0 and "no call is waiting" in capsys.readouterr().out
+    assert cli.main(["run", *args, "--out", str(tmp_path / "out")], now=now) == 0  # stamped: it trades from the next session, which is not stored yet
+    path.write_text(path.read_text(encoding="utf-8").replace("2026-11-19T07:00:00Z", "2026-11-17T16:00:00Z"), encoding="utf-8")
+    for command in (["run", *args, "--out", str(tmp_path / "out")], ["status", *args], ["stamp", *args]):
+        with pytest.raises(ValueError, match="call 50: its recorded_utc was not written by the scheduled job"):
+            cli.main(command, now=now)
+
+
+def test_the_live_ledger_carries_only_stamps_the_job_wrote(ledger_all, cfg):
+    """Runs on every pull request: a line that arrives with recorded_utc filled in fails here, before it can be merged."""
+    cli.check_stamps(ledger_all, cfg, cli.load_stamps(ROOT / "data" / cli.STAMPS))
 
 
 def test_a_pending_call_does_not_reach_the_books(tmp_path, capsys, ledger_all):
@@ -158,10 +242,10 @@ def test_a_pending_call_does_not_reach_the_books(tmp_path, capsys, ledger_all):
     new_id = max(c.call_id for c in ledger_all) + 1
     path = tmp_path / "calls.csv"
     path.write_text((ROOT / "calls.csv").read_text(encoding="utf-8") + f"{new_id},guid-a,2026-11-10T15:00:00Z,Friedberg,Uranium,URA:1,active,,,,\n", encoding="utf-8")
-    assert cli.main(["run", "--calls", str(path), "--out", str(tmp_path / "out")]) == 0
+    assert cli.main(["run", "--calls", str(path), "--out", str(tmp_path / "out")], now=clock()) == 0
     assert f"call {new_id} (Friedberg: Uranium) is on file and not traded yet" in capsys.readouterr().out
     with_pending = pl.read_parquet(tmp_path / "out" / "allin_12m" / "daily.parquet")
-    assert cli.main(["run", "--out", str(tmp_path / "plain")]) == 0
+    assert cli.main(["run", "--out", str(tmp_path / "plain")], now=clock()) == 0
     assert with_pending.equals(pl.read_parquet(tmp_path / "plain" / "allin_12m" / "daily.parquet"))
     assert json.loads((tmp_path / "out" / "allin_12m" / "manifest.json").read_text())["calls_in_ledger"] == len(ledger_all) + 1
 
@@ -191,15 +275,28 @@ def test_catalogue_appends_new_episodes_and_never_rewrites(tmp_path):
     assert path.read_text(encoding="utf-8") == after
 
 
-def test_feed_parser_refuses_what_it_should_not_read():
+def test_feed_parser_skips_bad_items_and_refuses_what_it_should_not_read(tmp_path, capsys):
     with pytest.raises(ValueError, match="document type or entities"):
         episodes.parse_feed(b'<?xml version="1.0"?><!DOCTYPE rss [<!ENTITY a "aaaa">]><rss><channel><item><title>&a;</title></item></channel></rss>')
-    with pytest.raises(ValueError, match="missing"):
+    with pytest.raises(ValueError, match="not UTF-8"):
+        episodes.parse_feed('<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE rss [<!ENTITY a "aaaa">]><rss/>'.encode("utf-16"))
+    with pytest.raises(ValueError, match="no readable episode"):
         episodes.parse_feed(b"<rss><channel><item><title>no guid</title><pubDate>Thu, 19 Nov 2026 23:10:00 +0000</pubDate></item></channel></rss>")
-    with pytest.raises(ValueError, match="duplicate"):
-        episodes.parse_feed(FEED.replace(b"g-new-2", b"g-new-1"))
-    with pytest.raises(ValueError, match="no time zone"):
-        episodes.parse_feed(FEED.replace(b"23:10:00 +0000", b"23:10:00 -0000"))
+    capsys.readouterr()
+    # one bad item does not cost the rest: no title, no time zone, a repeated identity
+    messy = FEED.replace(b"<item><title>An interview</title>", b"<item>").replace(b"21:43:00 +0000", b"21:43:00 -0000")
+    messy = messy.replace(b"</channel>", b"<item><title>Again</title><guid>g-new-2</guid><pubDate>Sat, 21 Nov 2026 10:00:00 +0000</pubDate></item></channel>")
+    assert [r[1] for r in episodes.parse_feed(messy)] == ["g-new-2"]
+    assert capsys.readouterr().out.count("feed item skipped") == 3
+    # show notes that mention a document type are just text, and a byte-order mark is fine
+    notes = b"\xef\xbb\xbf" + FEED.replace(b"<link>https://example.com/1</link>", b"<description><![CDATA[<!DOCTYPE html><p>notes</p>]]></description>")
+    assert len(episodes.parse_feed(notes)) == 3
+    # a catalogue whose last line has no line ending still gets each new row on its own line
+    path = tmp_path / "episodes.csv"
+    path.write_text((ROOT / "data" / "episodes.csv").read_text(encoding="utf-8").rstrip("\n"), encoding="utf-8")
+    before = len(episodes.load_catalogue(path))
+    assert len(episodes.update_catalogue(path, episodes.parse_feed(FEED))) == 2
+    assert len(episodes.load_catalogue(path)) == before + 2 and episodes.update_catalogue(path, episodes.parse_feed(FEED)) == []
 
 
 def test_screening_log_agrees_with_the_catalogue_and_the_ledger(ledger_all):
@@ -369,7 +466,9 @@ def test_a_day_needs_its_own_price_for_us_symbols_and_crypto_but_not_for_foreign
     assert engine.complete_through(plan("AAA:1"), st) == days[3]                    # a US symbol with no bar that day holds publication back
     assert engine.complete_through(plan("BTC-USD:1"), st) == days[4]                # so does a cryptocurrency: it trades every day
     assert engine.complete_through(plan("SKH-USD:1"), st) == days[5]                # a Seoul share is carried over its holidays
-    assert engine.complete_through(plan("AAA:1", forced="2026-01-12"), st) == days[5]   # and so is a ticker whose call has a forced exit
+    assert engine.complete_through(plan("AAA:1", forced="2026-01-12"), st) == days[5]   # and so is a ticker whose call is about to be closed by a forced exit
+    assert engine.complete_through(plan("AAA:1", forced="2026-03-02"), st) == days[3]   # but not one whose forced exit is weeks away
+    assert engine.incomplete_legs(plan("AAA:0.5;BTC-USD:0.5"), st, days[5]) == ["AAA", "BTC-USD"] and engine.incomplete_legs(plan("AAA:1"), st, days[3]) == []
     assert prices.us_listed("BRK-B") and prices.needs_own_day("BRK-B") and not prices.us_listed("000660.KS")
     assert prices.needs_own_day("BTC-USD") and not prices.needs_own_day("SKH-USD") and not prices.us_listed("BTC-USD")
 
@@ -380,8 +479,8 @@ def test_a_ticker_that_stops_trading_stalls_the_job_until_its_call_gets_a_forced
     dead = make_call(call_id=2, published="2026-01-03T15:00:00Z", legs="AAA:1")
     through = engine.complete_through(engine.plan([long_, dead], days), st)
     assert through == days[2]
-    with pytest.raises(RuntimeError, match="5 sessions cannot be published"):
-        cli.check_not_stalled(st, through)
+    with pytest.raises(RuntimeError, match="5 sessions cannot be published: since 2026-01-08 there is no price for AAA"):
+        cli.check_not_stalled(st, through, engine.plan([long_, dead], days))
     cli.check_not_stalled(st, days[4])                                              # three sessions behind is still tolerated
     closed = dataclasses.replace(dead, forced_exit=days[3])                         # the owner closes it on the first unpublished day
     plan = engine.plan([long_, closed], days)
@@ -403,6 +502,10 @@ def test_the_download_list_covers_open_and_coming_calls_only():
     plan = engine.plan([open_, coming, over, ends_today, unpriced_end], days)
     need, optional = cli.tickers_to_update(plan, st, "SPY")
     assert need == ["AAA", "BBB", "DDD", "SPY"] and optional == {"DDD"}             # DDD is only needed by a call with a forced exit
+    far = make_call(call_id=6, published="2026-01-03T15:00:00Z", legs="DDD:1", forced="2026-03-02")    # a forced exit weeks away excuses nothing yet
+    assert cli.tickers_to_update(engine.plan([open_, far], days), st, "SPY") == (["AAA", "DDD", "SPY"], set())
+    shared = make_call(call_id=7, published="2026-01-03T15:00:00Z", legs="DDD:0.5;AAA:0.5")           # nor does one on another call that holds the same ticker
+    assert cli.tickers_to_update(engine.plan([unpriced_end, shared], days), st, "SPY")[1] == set()
 
 
 def test_money_waits_in_cash_between_calls():
@@ -425,6 +528,51 @@ def test_the_paper_book_skips_a_call_that_leaves_on_its_first_day(store):
     assert engine.plan([call], s, not_before=dt.date(2026, 11, 7)) == []
     held = engine.plan([call], s, not_before=dt.date(2026, 11, 5))[0]
     assert held.entry == dt.date(2026, 11, 5) and held.exit == dt.date(2026, 11, 6)
+
+
+def test_a_book_that_loses_everything_stays_at_zero_and_still_reports():
+    days = weekdays(dt.date(2026, 1, 5), 40)
+    up = {d: 10.0 if i < 3 else 30.0 if i < 10 else 5.0 for i, d in enumerate(days)}        # triples, then ends below where it started
+    st = prices.Prices({"SPY": {d: 100.0 + i for i, d in enumerate(days)}, "UP": up})
+    short = make_call(call_id=2, published="2026-01-03T15:00:00Z", legs="UP:-1", forced=str(days[20]))   # the only call: gone when its ticker triples
+    later = make_call(call_id=3, published=f"{days[9]}T15:00:00Z", legs="SPY:1")             # there is nothing left to give the next call
+    res = engine.simulate(engine.plan([short, later], days), st, 10_000.0)
+    assert res.wiped == {2: days[3]} and res.equity[3:] == [0.0] * 37 and res.holdings == {3: 0.0}
+    s = engine.stats(res.equity, 252, [0.0] * 39)
+    assert (s["pnl"], s["return_pct"], s["max_dd_pct"]) == (-10_000.0, -100.0, -100.0) and s["sharpe_vs_bills"] is not None
+    bench = [st.on("SPY", d) for d in res.dates]
+    assert cli.market_fit(res.equity, bench)["beta_spy"] is not None and cli.market_fit(res.equity, [1.0] * 40)["beta_spy"] is None
+    assert list(csv.DictReader(cli.positions_csv(res, "paper", st).decode().splitlines()))[0]["weight_pct"] == "0.00"
+    row = cli.summary_row("x", "X", "monitor", True, res, bench, 10_000.0, st, [])
+    assert engine.call_value(short, days[0], days[20], st) == 1.5                            # held to its exit day the short would have won
+    assert (row["buys"], row["closed"], row["wins"]) == (2, 1, 0)                            # but it was closed at nothing: closed, and never a win
+    no_end = engine.simulate(engine.plan([dataclasses.replace(short, forced_exit=None)], days), st, 10_000.0)    # the same with its exit day a year away
+    assert cli.summary_row("x", "X", "monitor", True, no_end, bench, 10_000.0, st, [])["closed"] == 1
+
+
+def test_statistics_on_a_small_example():
+    equity = [100.0, 110.0, 99.0, 108.9]; pnl = [10.0, -11.0, 9.9]; ret = [0.1, -0.1, 0.1]; bills = [0.01, 0.02, 0.03]
+    s = engine.stats(equity, 252, bills)
+    assert s["sharpe"] == pytest.approx(statistics.mean(pnl) / statistics.stdev(pnl) * 252 ** 0.5)          # the sample deviation, as the dashboard uses
+    assert s["sharpe_per_dollar"] == pytest.approx(statistics.mean(ret) / statistics.stdev(ret) * 252 ** 0.5)
+    excess = [r - b for r, b in zip(ret, bills)]
+    assert s["sharpe_vs_bills"] == pytest.approx(statistics.mean(excess) / statistics.stdev(excess) * 252 ** 0.5)
+    assert s["max_dd"] == pytest.approx(11.0) and s["max_dd_pct"] == pytest.approx(-10.0) and s["return_pct"] == pytest.approx(8.9)
+    # each day earns the latest yield known on that day; the first day of the book earns nothing
+    d = weekdays(dt.date(2026, 1, 5), 4)
+    assert cli.bill_returns([(d[0], 2.52), (d[2], 5.04)], d) == pytest.approx([1e-4, 2e-4, 2e-4])
+    assert cli.bill_returns([(d[2], 5.04)], d) == pytest.approx([2e-4] * 3) and cli.bill_returns([], d) is None
+
+
+def test_a_carried_price_expires():
+    first = dt.date(2026, 1, 5)
+    p = prices.Prices({"SPY": {first: 1.0}, "SKH-USD": {first: 7.0}})
+    assert p.asof("SKH-USD", first + dt.timedelta(days=10)) == 7.0 and p.asof("SKH-USD", first + dt.timedelta(days=11)) is None
+    assert p.asof("SKH-USD", first - dt.timedelta(days=1)) is None and p.asof("SKH-USD", first + dt.timedelta(days=2), max_back=1) is None
+    days, st = small_store(12, SKH_USD=[7] + [None] * 11)                                    # Seoul's last close is on the first day
+    plan = engine.plan([make_call(published="2026-01-03T15:00:00Z", legs="SKH-USD:1")], days)
+    assert engine.complete_through(plan, st) == days[8]                                      # carried through Thu 15 Jan, ten days on, and no further
+    assert engine.incomplete_legs(plan, st, days[9]) == ["SKH-USD"]
 
 
 def test_ledger_and_statistics_reject_or_survive_degenerate_input():
@@ -489,9 +637,9 @@ def test_live_update_chains_ratios_and_never_rewrites(tmp_path):
 def test_live_update_refuses_a_symbol_whose_history_no_longer_matches(tmp_path):
     write_snapshot(tmp_path, {"SPY": [(D[0], 100.0), (D[1], 101.0), (D[2], 102.0)]})
     other = [(D[0], 10, 10.0), (D[1], 20, 20.0), (D[2], 15, 15.0), (D[3], 16, 16.0)]
-    with pytest.raises(RuntimeError, match="disagrees"):
+    with pytest.raises(RuntimeError, match="disagree: they imply .* no majority agrees"):
         prices.update_live(tmp_path, ["SPY"], dt.datetime(2026, 11, 20, 12, 0, tzinfo=UTC), lambda s, start: other)
-    with pytest.raises(RuntimeError, match="does not reach back"):
+    with pytest.raises(RuntimeError, match="none of the last 7 stored days is in the download"):
         prices.update_live(tmp_path, ["SPY"], dt.datetime(2026, 11, 20, 12, 0, tzinfo=UTC), lambda s, start: other[3:])
     assert not (tmp_path / prices.LIVE).exists()
 
@@ -520,10 +668,35 @@ def test_a_bar_far_from_the_one_before_it_is_refused_until_confirmed(tmp_path):
         prices.update_live(tmp_path, ["AAA", "SPY"], now, lambda s, start: vendor[s])
     added = prices.update_live(tmp_path, ["AAA", "SPY"], now, lambda s, start: vendor[s], allow_jump={"AAA"})   # the owner says the fall is real
     assert (D[3], "AAA", pytest.approx(20.0)) in added
-    bad_rate = {"000660.KS": [(D[0], 1000, 1000.0), (D[1], 1000, 1000.0)], "KRW=X": [(D[0], 1350.0, 1350.0), (D[1], 135.0, 135.0)]}
-    write_snapshot(tmp_path / "fx", {"SPY": [(D[0], 100.0)], "SKH-USD": [(D[0], 0.74)]})
-    with pytest.raises(RuntimeError, match="KRW=X: the rate"):
-        prices.update_live(tmp_path / "fx", ["SKH-USD"], now, lambda s, start: bad_rate[s])
+
+
+def test_a_bad_currency_print_is_left_out_and_the_series_carries_on(tmp_path, capsys):
+    """The won rate for one day is 15% off. That day's bar is not stored, nothing stops, and the day after is taken as usual."""
+    won = [(d, 1000, 1000.0) for d in D[:4]]
+    vendor = {"000660.KS": won, "KRW=X": [(D[0], 1350.0, 1350.0), (D[1], 1150.0, 1150.0), (D[2], 1352.0, 1352.0), (D[3], 1351.0, 1351.0)]}
+    upto = lambda n: (lambda s, start: vendor[s][:n])
+    at = lambda n: dt.datetime.combine(D[n], dt.time(1, 7), UTC)          # the slot in which the bar of D[n - 1] is final
+    series = {"SPY": [(D[0], 100.0)], "SKH-USD": [(D[0], 0.74)]}
+    write_snapshot(tmp_path / "a", series)
+    assert prices.update_live(tmp_path / "a", ["SKH-USD"], at(2), upto(2)) == []
+    assert "::warning::KRW=X: the rate used for 2026-11-17 is 0.85 times the one before it; the bar is left out" in capsys.readouterr().out
+    added = prices.update_live(tmp_path / "a", ["SKH-USD"], at(3), upto(3))
+    assert added == [(D[2], "SKH-USD", pytest.approx(0.74 * 1350 / 1352))]    # judged against the rate before the bad one; the bad day is never stored
+    assert prices.update_live(tmp_path / "a", ["SKH-USD"], at(4), upto(4)) == [(D[3], "SKH-USD", pytest.approx(0.74 * 1350 / 1351))]
+    write_snapshot(tmp_path / "b", series)                                # a rate a hundred times off is no different: left out, not an error
+    vendor["KRW=X"][1] = (D[1], 13.5, 13.5)
+    assert prices.update_live(tmp_path / "b", ["SKH-USD"], at(2), upto(2)) == []
+    assert [r[0] for r in prices.update_live(tmp_path / "b", ["SKH-USD"], at(3), upto(3))] == [D[2]]
+    write_snapshot(tmp_path / "c", series)                                # the owner can still say that a move was real
+    vendor["KRW=X"][1] = (D[1], 1150.0, 1150.0)
+    assert prices.update_live(tmp_path / "c", ["SKH-USD"], at(2), upto(2), allow_jump={"SKH-USD"}) == [(D[1], "SKH-USD", pytest.approx(0.74 * 1350 / 1150))]
+    write_snapshot(tmp_path / "d", series)                                # a bad print further back in the download, used for no new bar, changes nothing
+    old = {"000660.KS": won[:3], "KRW=X": [(D[0] - dt.timedelta(days=9), 13.5, 13.5), (D[0], 1350.0, 1350.0), (D[1], 1352.0, 1352.0), (D[2], 1351.0, 1351.0)]}
+    assert [r[0] for r in prices.update_live(tmp_path / "d", ["SKH-USD"], at(3), lambda s, start: old[s])] == [D[1], D[2]]
+    write_snapshot(tmp_path / "e", series)                                # the Seoul price itself more than doubling in a day is still a stop
+    vendor["000660.KS"] = [(D[0], 1000, 1000.0), (D[1], 2500, 2500.0)]; vendor["KRW=X"][1] = (D[1], 1352.0, 1352.0)
+    with pytest.raises(RuntimeError, match="SKH-USD: the bar of 2026-11-17 is 2.50 times the one before it"):
+        prices.update_live(tmp_path / "e", ["SKH-USD"], at(2), upto(2))
 
 
 def test_an_adjustment_the_vendor_books_late_is_picked_up_by_the_next_bar(tmp_path):
@@ -537,19 +710,22 @@ def test_an_adjustment_the_vendor_books_late_is_picked_up_by_the_next_bar(tmp_pa
     after = prices.load_prices(tmp_path)
     assert [after.on("AAA", d) for d in D[:3]] == [before.on("AAA", d) for d in D[:3]]      # and no stored row moved
     big = lambda s, start: [(d, c, a * (0.8 if d < D[3] else 1)) for d, c, a in late] + [(D[4], 99, 99.0)]
-    with pytest.raises(RuntimeError, match="disagrees"):                                     # a large disagreement is an error, not a dividend
+    with pytest.raises(RuntimeError, match="no majority agrees"):                            # the four stored bars imply 125, 125, 123.75 and 100: nobody wins
         prices.update_live(tmp_path, ["AAA"], dt.datetime(2026, 11, 20, 23, 0, tzinfo=UTC), big)
     added = prices.update_live(tmp_path, ["AAA"], dt.datetime(2026, 11, 20, 23, 0, tzinfo=UTC), big, allow_jump={"AAA"})    # unless the owner sides with the vendor
-    assert added == [(D[4], "AAA", pytest.approx(124.375))]                                  # the middle of what the four stored bars imply: 100, 123.75, 125, 125
+    assert added == [(D[4], "AAA", pytest.approx(125.0))]                                    # then the largest camp wins, the older one on a tie
 
 
-def test_a_late_adjustment_is_caught_up_once_and_never_shows_again(tmp_path):
-    """Run the update day after day across a dividend the vendor booked one day late: one catch-up, then the true series, with no echo
-    when the under-stated bar later becomes the one the chain could have started from. One run a day and one run after many days agree."""
+@pytest.mark.parametrize("cut, delay, caught", [(0.97, 1, True), (0.70, 1, True), (0.97, 3, True), (0.97, 4, False), (0.70, 5, False)])
+def test_a_late_adjustment_is_caught_up_once_and_never_shows_again(tmp_path, cut, delay, caught):
+    """Run the update day after day across a dividend the vendor booked `delay` sessions late. Booked within three sessions it is
+    caught up once, whatever its size and with nobody confirming anything, and never echoes when the under-stated bars later
+    become the oldest ones in the vote. Booked later than that, most stored bars already agree with the vendor and it is lost.
+    Either way the job never stops, and one run a day and one run after many days agree."""
     days = weekdays(dt.date(2026, 11, 2), 16)
     true = [100.0 * 1.01 ** i for i in range(16)]                         # total return: +1% a day throughout
-    ex = 6                                                                # the ex-dividend day: the price itself falls 2% net (1% gain less a 3% dividend)
-    seen_early = [v if i < ex else v * 0.97 for i, v in enumerate(true)]  # what the vendor showed until the dividend was booked: prices, no adjustment
+    ex = 6                                                                # the ex-dividend day: the price falls by the dividend
+    seen_early = [v if i < ex else v * cut for i, v in enumerate(true)]   # what the vendor showed until the dividend was booked: prices, no adjustment
 
     def vendor(upto, booked):
         series = true if booked else seen_early                          # once booked, earlier days are scaled so that ratios are total returns
@@ -560,19 +736,127 @@ def test_a_late_adjustment_is_caught_up_once_and_never_shows_again(tmp_path):
         return prices.update_live(folder, ["AAA", "SPY"], now, lambda s, start: vendor(upto, booked)(s, start) if s == "AAA" else [(d, 0, 1.0) for d in days[:upto + 1] if d >= start])
 
     daily = tmp_path / "daily"; write_snapshot(daily, {"SPY": [(d, 1.0) for d in days[:6]], "AAA": [(d, v) for d, v in zip(days[:6], true)]})
-    run(daily, ex, booked=False)                                          # the ex-date bar is stored before the vendor books the dividend
-    assert prices.load_prices(daily).on("AAA", days[ex]) == pytest.approx(true[ex] * 0.97)
-    for upto in range(ex + 1, 16):
-        run(daily, upto, booked=True)
+    for upto in range(ex, 16):
+        run(daily, upto, booked=upto >= ex + delay)                       # the first `delay` bars from the ex-date on are stored before the booking
     got = prices.load_prices(daily)
-    assert got.on("AAA", days[ex]) == pytest.approx(true[ex] * 0.97)      # the stored bar is never rewritten
-    for i in range(ex + 1, 16):
-        assert got.on("AAA", days[i]) == pytest.approx(true[i], rel=1e-6), days[i]      # caught up on the next bar and right ever after
+    for i in range(ex, 16):
+        right = true[i] if caught and i >= ex + delay else true[i] * cut  # stored bars are never rewritten; later ones are right, or stay short by the dividend
+        assert got.on("AAA", days[i]) == pytest.approx(right, rel=1e-6), days[i]
+    assert not (daily / prices.TRUST).exists()
 
     late = tmp_path / "late"; write_snapshot(late, {"SPY": [(d, 1.0) for d in days[:6]], "AAA": [(d, v) for d, v in zip(days[:6], true)]})
-    run(late, ex, booked=False); run(late, 15, booked=True)               # the same history in two runs instead of ten
+    run(late, ex + delay - 1, booked=False); run(late, 15, booked=True)   # the same history in two runs
     other = prices.load_prices(late)
     assert all(other.on("AAA", d) == pytest.approx(got.on("AAA", d), rel=1e-6) for d in days)
+
+
+def test_how_the_stored_bars_vote_on_a_new_level():
+    d = weekdays(dt.date(2026, 11, 2), 7)
+    vote = lambda levels, trust=False: prices._consensus(list(zip(d, levels)), "AAA", trust)
+    assert vote([100] * 7) == 100
+    assert vote([103, 103, 103, 103, 100, 100, 100]) == 103              # most bars are older than the vendor's change: caught up
+    assert vote([103, 103, 103, 100, 100, 100, 100]) == 100              # the change is older than most bars: they win and it is lost
+    assert vote([100, 100, 100, 103, 103, 103, 103]) == 103
+    assert vote([103, 103, 103, 100, 100, 100]) == 100                   # an exact half is not enough to leave the newest bars
+    assert vote([100, 100, 100, 103, 103, 103]) == 103
+    assert vote([103, 100]) == 100 and vote([103]) == 103
+    assert vote([100, 100.05, 99.97, 100.02, 100, 100, 100.01]) == 100   # rounding noise is one camp
+    assert vote([100, 100.5, 101, 101.5, 100.2, 100.8, 101.2]) == 100.8  # no camp, but all close together: the middle one
+    with pytest.raises(RuntimeError, match="AAA: .* imply 100 to 160 for the first bar after 2026-11-10 and no majority agrees"):
+        vote([100, 110, 120, 130, 140, 150, 160])
+    assert vote([100, 110, 120, 130, 140, 150, 160], trust=True) == 160  # confirmed by the owner: carry on from the newest bar
+    assert vote([125, 125, 110, 100], trust=True) == 125                 # or from the largest camp when there is one
+
+
+def test_a_confirmed_ticker_keeps_running_without_being_confirmed_again(tmp_path):
+    """The vendor's history under a held symbol no longer resembles the stored one. The job stops; the owner confirms the vendor
+    once; the scheduled runs after that carry on by themselves, because only the bars stored since then vote."""
+    days = weekdays(dt.date(2026, 11, 2), 14)
+    write_snapshot(tmp_path, {"SPY": [(d, 100.0 + i) for i, d in enumerate(days[:8])], "AAA": [(d, 50.0 + (i * i) % 7) for i, d in enumerate(days[:8])]})
+    other = [20.0, 26.0, 21.0, 29.0, 23.0, 31.0, 24.0, 30.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0]
+
+    def vendor(upto):
+        return lambda s, start: [(d, 0, other[i] if s == "AAA" else 100.0 + i) for i, d in enumerate(days) if i <= upto and d >= start]
+    at = lambda upto: dt.datetime.combine(days[upto] + dt.timedelta(days=1), dt.time(1, 7), UTC)
+    with pytest.raises(RuntimeError, match="AAA: the last stored bars and the download disagree.*--allow-jump AAA"):
+        prices.update_live(tmp_path, ["AAA", "SPY"], at(8), vendor(8))
+    assert not (tmp_path / prices.LIVE).exists() and not (tmp_path / prices.TRUST).exists()
+    added = prices.update_live(tmp_path, ["AAA", "SPY"], at(8), vendor(8), allow_jump={"AAA", "SPY"})
+    assert [(d, t) for d, t, _ in added] == [(days[8], "AAA"), (days[8], "SPY")]
+    assert (tmp_path / prices.TRUST).read_text() == f"ticker,from_date,confirmed_utc\nAAA,{days[8]},{at(8):%Y-%m-%dT%H:%M:%SZ}\nSPY,{days[8]},{at(8):%Y-%m-%dT%H:%M:%SZ}\n"
+    assert prices.load_trust(tmp_path) == {"AAA": days[8], "SPY": days[8]}
+    for upto in range(9, 14):                                             # the scheduled runs that follow
+        prices.update_live(tmp_path, ["AAA", "SPY"], at(upto), vendor(upto))
+    got = prices.load_prices(tmp_path)
+    for i in range(9, 14):
+        assert got.on("AAA", days[i]) / got.on("AAA", days[i - 1]) == pytest.approx(other[i] / other[i - 1])
+        assert got.on("SPY", days[i]) == pytest.approx(100.0 + i)        # confirming a ticker that was fine changes nothing for it
+
+
+def test_a_ticker_not_updated_for_months_is_checked_against_the_vendor_and_not_against_its_old_bar(tmp_path):
+    """AAA was last held in March. A new call brings it back in November at 3.4 times its last stored level: every single day
+    of the climb was small, so nothing is refused. A tenfold day among the bars that are stored still is."""
+    old = weekdays(dt.date(2026, 3, 2), 8); recent = weekdays(dt.date(2026, 11, 9), 8)
+    every = [d for d in weekdays(old[0], 200) if prices.session_day(d) and d <= recent[-1]]
+    level = {d: 10.0 * 1.007 ** i for i, d in enumerate(every)}
+    series = {"SPY": [(d, 100.0) for d in old + recent[:6]], "AAA": [(d, level[d]) for d in old]}
+    vendor = lambda s, start: [(d, 0, level[d] if s == "AAA" else 100.0) for d in every if d >= start]
+    now = dt.datetime.combine(recent[7] + dt.timedelta(days=1), dt.time(1, 7), UTC)
+    write_snapshot(tmp_path / "a", series)
+    added = prices.update_live(tmp_path / "a", ["AAA", "SPY"], now, vendor, published_through=recent[5])
+    assert sorted((d, t) for d, t, _ in added) == [(recent[6], "AAA"), (recent[6], "SPY"), (recent[7], "AAA"), (recent[7], "SPY")]   # nothing from the months in between
+    assert added[0] == (recent[6], "AAA", pytest.approx(level[recent[6]])) and added[0][2] / level[old[-1]] > 3.3
+    write_snapshot(tmp_path / "b", series)
+    spiked = lambda s, start: [(d, c, a * (10 if s == "AAA" and d >= recent[7] else 1)) for d, c, a in vendor(s, start)]
+    with pytest.raises(RuntimeError, match=f"AAA: the bar of {recent[7]} is 10.07 times the one before it"):
+        prices.update_live(tmp_path / "b", ["AAA", "SPY"], now, spiked, published_through=recent[5])
+    write_snapshot(tmp_path / "c", series)                                # the same spike on a day that is not stored stops nothing
+    earlier = lambda s, start: [(d, c, a * (10 if s == "AAA" and d >= recent[2] else 1)) for d, c, a in vendor(s, start)]
+    assert len(prices.update_live(tmp_path / "c", ["AAA", "SPY"], now, earlier, published_through=recent[5])) == 4
+
+
+def test_a_download_that_overlaps_the_stored_days_only_in_part_is_enough_and_one_that_does_not_needs_the_owner(tmp_path):
+    series = {"SPY": [(d, 100.0) for d in D[:3]], "AAA": [(D[0], 50.0), (D[1], 51.0), (D[2], 49.0)]}
+    spy = [(d, 100, 100.0) for d in D]; now = dt.datetime(2026, 11, 20, 12, 0, tzinfo=UTC)          # Friday midday: Thursday's bar is final
+    write_snapshot(tmp_path / "a", series)
+    short = {"SPY": spy, "AAA": [(D[2], 49, 24.5), (D[3], 52, 26.0)]}                                # the vendor's history starts at the last stored day
+    assert (D[3], "AAA", pytest.approx(52.0)) in prices.update_live(tmp_path / "a", ["AAA", "SPY"], now, lambda s, start: short[s])
+    write_snapshot(tmp_path / "b", series)
+    none = {"SPY": spy, "AAA": [(D[3], 7, 7.0), (D[4], 8, 8.0)]}                                     # or after it: nothing to continue from
+    with pytest.raises(RuntimeError, match="AAA: none of the last 7 stored days is in the download .*--allow-jump AAA.*forced_exit"):
+        prices.update_live(tmp_path / "b", ["AAA", "SPY"], now, lambda s, start: none[s])
+    assert not (tmp_path / "b" / prices.LIVE).exists()
+    added = prices.update_live(tmp_path / "b", ["AAA", "SPY"], now, lambda s, start: none[s], allow_jump={"AAA"})
+    assert (D[3], "AAA", 7.0) in added                                                               # confirmed: the series starts again at the vendor's level
+    later = prices.update_live(tmp_path / "b", ["AAA", "SPY"], dt.datetime(2026, 11, 20, 23, 0, tzinfo=UTC), lambda s, start: none[s])
+    assert (D[4], "AAA", pytest.approx(8.0)) in later                                                # and the next run carries on by itself
+    write_snapshot(tmp_path / "c", series)                                                           # for a ticker about to be closed anyway it is not worth stopping
+    assert prices.update_live(tmp_path / "c", ["AAA", "SPY"], now, lambda s, start: none[s], optional={"AAA"}) == [(D[3], "SPY", pytest.approx(100.0))]
+
+
+def test_a_bar_on_a_day_the_exchange_is_closed_is_dropped(tmp_path, capsys):
+    """Thanksgiving 2026. The vendor shows a bar for it, and one for the Saturday; neither becomes a session. Crypto trades every day."""
+    days = [dt.date(2026, 11, 23), dt.date(2026, 11, 24), dt.date(2026, 11, 25)]
+    holiday, friday, saturday = dt.date(2026, 11, 26), dt.date(2026, 11, 27), dt.date(2026, 11, 28)
+    write_snapshot(tmp_path, {"SPY": [(d, 100.0) for d in days], "AAA": [(d, 10.0) for d in days], "BTC-USD": [(d, 5.0) for d in days]})
+    vendor = lambda s, start: [(d, 1, {"SPY": 100.0, "AAA": 10.0, "BTC-USD": 5.0}[s]) for d in [*days, holiday, friday, saturday]]
+    added = prices.update_live(tmp_path, ["AAA", "BTC-USD", "SPY"], dt.datetime(2026, 11, 29, 1, 7, tzinfo=UTC), vendor)
+    assert {d for d, t, _ in added if t != "BTC-USD"} == {friday}
+    assert [d for d, t, _ in added if t == "BTC-USD"] == [holiday, friday, saturday]
+    assert "SPY: the vendor has a bar on 2026-11-26, 2026-11-28, when the exchange is closed; dropped" in capsys.readouterr().out
+    assert prices.load_prices(tmp_path).sessions() == [*days, friday]
+
+
+def test_the_exchange_calendar_agrees_with_six_years_of_sessions(store):
+    s = store.sessions(); have = set(s)
+    weekdays_ = [d for d in (s[0] + dt.timedelta(days=i) for i in range((s[-1] - s[0]).days + 1)) if d.weekday() < 5]
+    closed = {d for d in weekdays_ if d not in have}
+    assert len(closed) > 55 and {d for d in weekdays_ if not prices.session_day(d)} == closed - {dt.date(2025, 1, 9)}   # the day of mourning for President Carter was not on any calendar
+    assert all(prices.session_day(d) for d in s)
+    assert not prices.session_day(dt.date(2027, 6, 18)) and not prices.session_day(dt.date(2027, 12, 24))    # holidays on a Saturday close the Friday before
+    assert prices.session_day(dt.date(2027, 12, 31)) and not prices.session_day(dt.date(2028, 4, 14))        # except New Year's Day; Good Friday 2028
+    assert all(d.year == year and d.weekday() < 5 for year in range(2021, 2031) for d in prices.market_holidays(year))
+    assert [len(prices.market_holidays(year)) for year in (2021, 2022, 2026, 2027, 2028)] == [9, 9, 10, 10, 9]   # New Year's Day falls on a Saturday in 2022 and 2028
 
 
 def test_a_first_time_ticker_keeps_only_final_unpublished_bars_and_an_optional_one_may_fail(tmp_path):
@@ -802,6 +1086,23 @@ def test_a_call_cannot_be_slipped_onto_a_published_day(tmp_path, calls, store, c
     cli.publish(out, cfg, changed, store, len(calls) + 1, now_utc=now, allow_restate=True)
 
 
+def test_published_days_are_compared_on_trades_capital_pnl_and_mode():
+    d = weekdays(dt.date(2026, 11, 19), 3)
+    old = pl.DataFrame({"date": d[:2], "mode": ["paper"] * 2, "pnl": [0.0, 1.0], "capital": [10_000.0, 10_001.0], "n_trades": [2, 0]}, schema=contract.DAILY_SCHEMA)
+    more = pl.concat([old, pl.DataFrame({"date": d[2:], "mode": ["paper"], "pnl": [3.0], "capital": [10_004.0], "n_trades": [1]}, schema=contract.DAILY_SCHEMA)])
+    for check in (cli.check_book_unchanged, contract.check_append_only):
+        check(None, old); check(old, old); check(old, more)                                 # a new day is always fine
+    with pytest.raises(RuntimeError, match="trades or capital"):
+        cli.check_book_unchanged(old, more.with_columns(pl.col("capital") + 5.0))          # the same trades with other money behind them
+    with pytest.raises(RuntimeError, match="trades or capital"):
+        cli.check_book_unchanged(old, more.with_columns(pl.col("n_trades") + 1))
+    cli.check_book_unchanged(old, more.with_columns(pl.col("capital") + 0.004))            # rounding is not a change
+    with pytest.raises(RuntimeError, match="would change"):
+        contract.check_append_only(old, more.with_columns(pl.lit("backtest").alias("mode")))    # a paper day cannot become a backtest day
+    with pytest.raises(RuntimeError, match="would change"):
+        contract.check_append_only(old, more.with_columns(pl.col("pnl") + 0.02))
+
+
 def test_a_day_waits_for_the_final_bar_of_a_crypto_leg():
     days, st = small_store(4, BTC_USD=[1, 2, 3, 4])
     plan = engine.plan([make_call(published="2026-01-03T15:00:00Z", legs="SPY:0.5;BTC-USD:0.5")], days)
@@ -837,8 +1138,97 @@ def test_carried_prices_are_reported(calls, store):
     assert cli.stale_legs(res, st) == ["call 7: SKH-USD has no price since 2026-01-06; it is carried at that close"]
 
 
+def stand_in_vendor(store, moves, missing=(), fail=(), seoul_missing=()):
+    """A data vendor for tests: each symbol's stored history, then one bar for every day in `moves`, which gives the day's gross
+    return for all symbols or, as a dict, per symbol with "*" for the rest. `missing` holds (symbol, day) bars the vendor lacks."""
+    local = {"000660.KS": "SKH-USD", "005930.KS": "SAMSUNG-USD"}
+
+    def fetch(symbol, start):
+        if symbol in fail:
+            raise OSError(f"{symbol}: no such symbol")
+        if symbol == "KRW=X":
+            return [(d, 1350.0, 1350.0) for d in weekdays(start, 80) if d <= max(moves)]
+        base, k = local.get(symbol, symbol), (1350.0 if symbol in local else 1.0)
+        bars = [(d, store.on(base, d) * k, store.on(base, d) * k) for d in store._dates[base] if d >= start]
+        level = bars[-1][1]
+        for d in sorted(moves):
+            m = moves[d]; level *= m.get(symbol, m.get("*", 1.0)) if isinstance(m, dict) else m
+            if (symbol, d) not in missing and not (symbol in local and d in seoul_missing):
+                bars.append((d, level, level))
+        return bars
+    return fetch
+
+
+def test_the_scheduled_run_from_end_to_end(tmp_path, store, backtest_ledger_text, monkeypatch):
+    """The command the job runs, over the first seven sessions, with stand-ins for the clock and the vendor: a late foreign bar,
+    a bar that needs confirming, a ticker that stops trading, a restatement, and a ledger that cannot be right."""
+    data = tmp_path / "data"; data.mkdir(); shutil.copy(ROOT / "data" / prices.SNAPSHOT, data / prices.SNAPSHOT)
+    calls_file = tmp_path / "calls.csv"; calls_file.write_text(backtest_ledger_text, encoding="utf-8")
+    out = tmp_path / "results"
+    base = ["--data", str(data), "--calls", str(calls_file), "--out", str(out)]
+    through = lambda: json.loads((out / "index.json").read_text())["data_through"]
+    paper = lambda: pl.read_parquet(out / "allin_12m" / "daily.parquet").filter(pl.col("mode") == "paper")
+    held = lambda: {r["call_id"] for r in csv.DictReader((out / "allin_12m" / "positions.csv").open())}
+    at = lambda day, hour=1: dt.datetime.combine(day + dt.timedelta(days=1), dt.time(hour, 7), UTC)     # the job's two slots after the session of `day`
+    thu, fri, mon, tue, wed, fri2 = (dt.date(2026, 11, n) for n in (19, 20, 23, 24, 25, 27))             # the 26th is Thanksgiving
+
+    def set_field(call_id, column, value):
+        text = calls_file.read_text(encoding="utf-8"); line = next(row for row in text.splitlines() if row.startswith(f"{call_id},"))
+        a, b = ledger.field_spans(line)[ledger.COLUMNS.index(column)]
+        calls_file.write_text(text.replace(line, line[:a] + value + line[b:]), encoding="utf-8")
+
+    assert cli.main(["run", *base], now=dt.datetime(2026, 11, 19, 7, 7, tzinfo=UTC)) == 0 and through() == "2026-11-18"
+
+    # Thursday: the Seoul bars are not posted yet. The day is published with the last Seoul close, and when the bars turn up
+    # six hours later they are left out, so the published day does not move.
+    moves = {thu: 1.01}
+    assert cli.main(["run", "--fetch", *base], now=at(thu), fetch=stand_in_vendor(store, moves, seoul_missing={thu})) == 0
+    first_day = paper()
+    assert through() == str(thu) and first_day["n_trades"].to_list() == [19] and first_day["capital"].to_list() == [10_000.0]
+    assert cli.main(["run", "--fetch", *base], now=at(thu, 7), fetch=stand_in_vendor(store, moves)) == 0
+    assert prices.load_prices(data).on("SKH-USD", thu) is None and paper().equals(first_day)
+
+    # Friday: one ticker falls by more than half. Nothing at all is stored until the owner confirms it, once.
+    moves[fri] = {"*": 1.0, "SMH": 0.4}
+    with pytest.raises(RuntimeError, match="SMH: the bar of 2026-11-20 is 0.40 times the one before it.*--allow-jump SMH"):
+        cli.main(["run", "--fetch", *base], now=at(fri), fetch=stand_in_vendor(store, moves))
+    assert prices.load_prices(data).sessions()[-1] == thu and through() == str(thu)
+    assert cli.main(["run", "--fetch", "--allow-jump", "SMH", *base], now=at(fri), fetch=stand_in_vendor(store, moves)) == 0
+    assert through() == str(fri) and (data / prices.TRUST).read_text().splitlines()[1] == "SMH,2026-11-20,2026-11-21T01:07:00Z"
+    seoul = sum(w for c in ledger.load_calls(calls_file) if str(c.call_id) in held() for ticker, w in c.legs if ticker in prices.SYNTHETIC)
+    assert seoul > 0 and paper()["pnl"][1] == pytest.approx(10_000 / 19 * (-0.6 + 0.01 * seoul), abs=0.01)   # one call of nineteen lost 60%; Thursday's Seoul move lands a day late
+    assert prices.load_prices(data).on("SKH-USD", fri) == pytest.approx(prices.load_prices(data).on("SKH-USD", dt.date(2026, 11, 18)) * 1.01)   # Thursday's Seoul move arrives with Friday's bar
+
+    # The week after, XLU gets no more bars. After more than three such sessions the job stops and says which ticker.
+    for day in (mon, tue, wed, fri2):
+        moves[day] = 1.0
+    no_xlu = {("XLU", day) for day in (mon, tue, wed, fri2)}
+    with pytest.raises(RuntimeError, match="4 sessions cannot be published: since 2026-11-23 there is no price for XLU"):
+        cli.main(["run", "--fetch", *base], now=at(fri2), fetch=stand_in_vendor(store, moves, missing=no_xlu))
+    assert through() == str(fri)
+    # The way out is a forced exit. From then on the vendor not knowing the symbol at all is not an error either.
+    set_field(47, "forced_exit", "2026-11-27")
+    assert cli.main(["run", "--fetch", *base], now=at(fri2, 7), fetch=stand_in_vendor(store, moves, fail={"XLU"})) == 0
+    assert through() == str(fri2) and paper()["date"].to_list() == [thu, fri, mon, tue, wed, fri2]
+    assert len(held()) == 18 and "47" not in held() and paper()["n_trades"].to_list()[-1] == 1
+
+    # A change to the ledger that would rewrite published days is refused, unless the run is told to restate.
+    set_field(49, "status", "excluded")
+    with pytest.raises(RuntimeError, match="would change"):
+        cli.main(["run", *base], now=at(fri2, 7))
+    assert len(held()) == 18
+    assert cli.main(["run", "--allow-restate", *base], now=at(fri2, 7)) == 0 and len(held()) == 17 and paper()["n_trades"][0] == 18
+
+    # A ledger that cannot be right stops the run and the stamp before anything is computed.
+    calls_file.write_text(calls_file.read_text(encoding="utf-8") + "50,guid-x,2027-01-01T00:00:00Z,Jason,From the future,SPY:1,active,,,,\n", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    for command in (["run", *base], ["status", *base[:4]], ["stamp", *base[:4]]):
+        with pytest.raises(ValueError, match="call 50: published_utc is in the future"):
+            cli.main(command, now=at(fri2, 7))
+
+
 def test_command_line_run(tmp_path):
-    assert cli.main(["run", "--out", str(tmp_path / "out")]) == 0
+    assert cli.main(["run", "--out", str(tmp_path / "out")], now=clock()) == 0
     assert (tmp_path / "out" / "allin_12m" / "daily.parquet").exists()
     assert pl.read_parquet(tmp_path / "out" / "backtest_summary.parquet").height == 4
 
