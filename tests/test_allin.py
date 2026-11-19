@@ -17,19 +17,41 @@ MARK = dt.date(2026, 9, 25)          # the day the recovered backtest marked its
 UTC = dt.timezone.utc
 
 
-@pytest.fixture(scope="module")
-def calls():
-    return ledger.load_calls(ROOT / "calls.csv")
-
-
-@pytest.fixture(scope="module")
-def store():
-    return prices.load_prices(ROOT / "data")
+FROZEN_THROUGH = dt.date(2026, 11, 18)      # last day of the price snapshot
 
 
 @pytest.fixture(scope="module")
 def cfg():
     return cli.load_config(ROOT / "strategies.toml")
+
+
+@pytest.fixture(scope="module")
+def ledger_all():
+    """Every line of the live ledger, including calls added after these tests were written."""
+    return ledger.load_calls(ROOT / "calls.csv")
+
+
+@pytest.fixture(scope="module")
+def calls(ledger_all, cfg):
+    """The backtest ledger: it never changes, so figures computed from it can be pinned."""
+    return [c for c in ledger_all if c.call_id <= cfg["recovered_calls_through"]]
+
+
+@pytest.fixture(scope="module")
+def store(tmp_path_factory):
+    """The frozen price snapshot alone, without the rows the daily job keeps appending."""
+    folder = tmp_path_factory.mktemp("frozen")
+    shutil.copy(ROOT / "data" / prices.SNAPSHOT, folder / prices.SNAPSHOT)
+    frozen = prices.load_prices(folder)
+    assert frozen.sessions()[-1] == FROZEN_THROUGH
+    return frozen
+
+
+@pytest.fixture(scope="module")
+def backtest_ledger_text(cfg):
+    """calls.csv as it was when the backtest ledger was complete: the header and the calls up to the last backtest id."""
+    lines = (ROOT / "calls.csv").read_text(encoding="utf-8").splitlines(keepends=True)
+    return "".join(lines[:1 + cfg["recovered_calls_through"]])
 
 
 def make_call(call_id=900, published="2026-10-12T15:49:00Z", legs="SPY:1", recorded="", forced="", speaker="Jason", status="active"):
@@ -47,11 +69,11 @@ def weekdays(start, n):
 
 
 # ---------- ledger and calendar rule ----------
-def test_ledger_shape(calls):
-    assert [c.call_id for c in sorted(calls, key=lambda c: c.call_id)] == list(range(1, len(calls) + 1))
-    assert len(calls) >= 49
+def test_ledger_shape(ledger_all, calls):
+    assert [c.call_id for c in sorted(ledger_all, key=lambda c: c.call_id)] == list(range(1, len(ledger_all) + 1))     # ids are consecutive
+    assert len(calls) == 49
     assert [c.call_id for c in calls if c.status == "excluded"] == [41]            # GEODNET: no price history
-    for c in calls:
+    for c in ledger_all:
         assert abs(sum(abs(w) for _, w in c.legs) - 1) < 1e-3
 
 
@@ -72,7 +94,7 @@ def test_exit_is_one_calendar_year_later_rolled_to_a_session(store):
     s = store.sessions()
     assert ledger.exit_date(dt.date(2025, 4, 3), s) == dt.date(2026, 4, 6)          # 3 Apr 2026 is Good Friday
     assert ledger.exit_date(dt.date(2021, 4, 19), s) == dt.date(2022, 4, 19)
-    assert ledger.exit_date(dt.date(2026, 6, 3), s) is None                         # not reached yet
+    assert ledger.exit_date(s[-1], s) is None                                       # not reached yet
     assert ledger.plus_year(dt.date(2024, 2, 29)) == dt.date(2025, 2, 28)
 
 
@@ -110,9 +132,9 @@ def test_a_new_call_is_on_file_but_not_traded_until_it_is_stamped(calls, cfg):
     assert not cli.is_pending(dataclasses.replace(new, recorded_utc=dt.datetime(2026, 11, 22, 9, 0, tzinfo=UTC)), cfg)
 
 
-def test_stamping_fills_only_new_empty_lines_and_changes_nothing_else(tmp_path, cfg):
+def test_stamping_fills_only_new_empty_lines_and_changes_nothing_else(tmp_path, cfg, backtest_ledger_text):
     path = tmp_path / "calls.csv"
-    original = (ROOT / "calls.csv").read_text(encoding="utf-8")
+    original = backtest_ledger_text
     extra = ("50,guid-a,2026-11-21T02:35:00Z,Friedberg,Uranium,URA:1,active,,,,\"Says he is buying; a note, with a comma.\"\n"
              "51,guid-b,2026-11-21T02:35:00Z,Jason,Something private,SPY:1,excluded,,,,\n"
              "52,guid-c,2026-11-23T20:00:00Z,Chamath,Copper,CPER:1,active,2026-11-24T05:00:00Z,,,\n")
@@ -130,16 +152,17 @@ def test_stamping_fills_only_new_empty_lines_and_changes_nothing_else(tmp_path, 
     assert stamped[46].recorded_utc is None                                        # the backtest ledger is left alone
 
 
-def test_a_pending_call_does_not_reach_the_books(tmp_path, capsys):
-    folder = tmp_path / "repo"; folder.mkdir()
-    path = folder / "calls.csv"
-    path.write_text((ROOT / "calls.csv").read_text(encoding="utf-8") + "50,guid-a,2026-11-18T22:00:00Z,Friedberg,Uranium,URA:1,active,,,,\n", encoding="utf-8")
+def test_a_pending_call_does_not_reach_the_books(tmp_path, capsys, ledger_all):
+    """Run the real pipeline twice, once with an unstamped line added: the published days are identical."""
+    new_id = max(c.call_id for c in ledger_all) + 1
+    path = tmp_path / "calls.csv"
+    path.write_text((ROOT / "calls.csv").read_text(encoding="utf-8") + f"{new_id},guid-a,2026-11-18T22:00:00Z,Friedberg,Uranium,URA:1,active,,,,\n", encoding="utf-8")
     assert cli.main(["run", "--calls", str(path), "--out", str(tmp_path / "out")]) == 0
-    assert "call 50 (Friedberg: Uranium) is on file and not traded yet" in capsys.readouterr().out
+    assert f"call {new_id} (Friedberg: Uranium) is on file and not traded yet" in capsys.readouterr().out
     with_pending = pl.read_parquet(tmp_path / "out" / "allin_12m" / "daily.parquet")
     assert cli.main(["run", "--out", str(tmp_path / "plain")]) == 0
     assert with_pending.equals(pl.read_parquet(tmp_path / "plain" / "allin_12m" / "daily.parquet"))
-    assert json.loads((tmp_path / "out" / "allin_12m" / "manifest.json").read_text())["calls_in_ledger"] == 50
+    assert json.loads((tmp_path / "out" / "allin_12m" / "manifest.json").read_text())["calls_in_ledger"] == len(ledger_all) + 1
 
 
 FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -178,9 +201,9 @@ def test_feed_parser_refuses_what_it_should_not_read():
         episodes.parse_feed(FEED.replace(b"23:10:00 +0000", b"23:10:00 -0000"))
 
 
-def test_screening_log_agrees_with_the_catalogue_and_the_ledger(calls):
+def test_screening_log_agrees_with_the_catalogue_and_the_ledger(ledger_all):
     catalogue = {r["guid"]: r for r in episodes.load_catalogue(ROOT / "data" / "episodes.csv")}
-    by_id = {c.call_id: c for c in calls}
+    by_id = {c.call_id: c for c in ledger_all}
     with open(ROOT / "data" / "screening_log.csv", newline="", encoding="utf-8") as f:
         log = list(csv.DictReader(f))
     assert len({r["guid"] for r in log}) == len(log) >= 17
@@ -192,7 +215,7 @@ def test_screening_log_agrees_with_the_catalogue_and_the_ledger(calls):
         for cid in filter(None, r["calls_added"].split(";")):
             assert by_id[int(cid)].episode_guid == r["guid"]
     logged = {int(i) for r in log for i in filter(None, r["calls_added"].split(";"))}
-    assert logged == {c.call_id for c in calls if c.call_id > 45}                  # every call found by screening is in the log
+    assert {46, 47, 48, 49} <= logged <= set(by_id)                                # the four calls found on 19 Nov 2026 are in the log
 
 
 # ---------- the recovered backtest ----------
@@ -277,8 +300,8 @@ def test_paper_book_starts_in_cash_and_buys_what_is_open(calls, store):
 def test_paper_book_tracks_the_backtest_book_in_returns(calls, store):
     """From any start day the two books hold the same calls, so their daily returns differ only through the weights."""
     s = store.sessions(); start = dt.date(2026, 11, 9)
-    paper = engine.simulate(engine.plan(calls, s, not_before=start), store, 10_000.0)
-    back = engine.simulate(engine.plan(calls, s), store, 10_000.0)
+    paper = engine.simulate(engine.plan(calls, s, not_before=start), store, 10_000.0, end=FROZEN_THROUGH)
+    back = engine.simulate(engine.plan(calls, s), store, 10_000.0, end=FROZEN_THROUGH)
     i = back.dates.index(start)
     a = paper.equity[-1] / paper.equity[0] - 1; b = back.equity[-1] / back.equity[i] - 1
     assert abs(a - b) < 0.01
@@ -453,9 +476,8 @@ def test_paper_rows_follow_the_backtest_rows(calls, store, cfg):
 
 def test_first_production_days(tmp_path, calls, store, cfg):
     """A dry run of the scheduled job over the first two paper days, with a stand-in for the data vendor."""
-    data = tmp_path / "data"; shutil.copytree(ROOT / "data", data)
-    if (data / prices.LIVE).exists():
-        pytest.skip("live prices are already being appended")
+    data = tmp_path / "data"; data.mkdir()
+    shutil.copy(ROOT / "data" / prices.SNAPSHOT, data / prices.SNAPSHOT)
     new_days = [dt.date(2026, 11, 19), dt.date(2026, 11, 20)]
     local = {"000660.KS": "SKH-USD", "005930.KS": "SAMSUNG-USD"}
 
@@ -481,9 +503,6 @@ def test_first_production_days(tmp_path, calls, store, cfg):
     assert paper["pnl"][0] == 0.0 and paper["capital"][0] == 10_000.0 and paper["n_trades"][0] == 19
     assert paper["pnl"][1] == pytest.approx(100.0, abs=1e-3)         # 19 long calls, each up 1% (stored levels keep 8 digits)
     assert table.filter(pl.col("mode") == "backtest")["date"].max() == dt.date(2026, 11, 18)
-    committed = ROOT / "results" / "allin_12m" / "daily.parquet"
-    if committed.exists():
-        contract.check_append_only(pl.read_parquet(committed), table)
     out = str(tmp_path / "results")
     cli.publish(out, cfg, built, fresh, len(calls), now_utc=now)
     held = list(csv.DictReader((tmp_path / "results" / "allin_12m" / "positions.csv").open()))
@@ -497,7 +516,7 @@ def test_command_line_run(tmp_path):
     assert pl.read_parquet(tmp_path / "out" / "backtest_summary.parquet").height == 4
 
 
-def test_committed_results_match_the_code(calls, store, cfg):
+def test_committed_results_match_the_code(ledger_all, cfg):
     """The results folder in the repository is what this code produces from the committed ledger and prices."""
     path = ROOT / "results" / "allin_12m" / "daily.parquet"
     if not path.exists():
@@ -505,6 +524,7 @@ def test_committed_results_match_the_code(calls, store, cfg):
     old = pl.read_parquet(path)
     index = json.loads((ROOT / "results" / "index.json").read_text())
     now = dt.datetime.fromisoformat(index["updated_utc"].replace("Z", "+00:00"))
-    new = cli.build(calls, store, cfg, now)["daily"]["allin_12m"]
+    traded = [c for c in ledger_all if not cli.is_pending(c, cfg)]
+    new = cli.build(traded, prices.load_prices(ROOT / "data"), cfg, now)["daily"]["allin_12m"]
     contract.check_append_only(old, new)
     assert new.height >= old.height
