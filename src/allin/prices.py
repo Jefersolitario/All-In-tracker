@@ -83,11 +83,11 @@ def final_through(ticker: str, now_utc: dt.datetime) -> dt.date:
     if ticker in SYNTHETIC:
         return min(final_through(part, now_utc) for part in SYNTHETIC[ticker])
     if ticker.endswith(".KS"):
-        lag = dt.timedelta(hours=7)                       # Seoul closes 06:30 UTC
+        lag = dt.timedelta(hours=7, minutes=30)           # Seoul closes 06:30 UTC
     elif ticker.endswith("=X") or ticker.endswith("-USD"):
-        lag = dt.timedelta(hours=24, minutes=5)           # currency and crypto days end at midnight UTC or just before
+        lag = dt.timedelta(hours=24, minutes=30)          # currency and crypto days end at midnight UTC or just before
     else:
-        lag = dt.timedelta(hours=21, minutes=30)          # New York closes 20:00 or 21:00 UTC
+        lag = dt.timedelta(hours=22, minutes=30)          # New York closes 20:00 UTC in summer, 21:00 UTC in winter
     return (now_utc - lag).date()
 
 

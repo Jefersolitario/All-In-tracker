@@ -348,7 +348,7 @@ def test_live_update_chains_ratios_and_never_rewrites(tmp_path):
     assert p.on("AAA", D[2]) == 49.0 and p.on("AAA", D[3]) == pytest.approx(52.0) and p.on("AAA", D[4]) is None
     assert all(start <= D[2] - dt.timedelta(days=10) for _, start in asked)
     assert prices.update_live(tmp_path, ["AAA", "SPY"], now, fetch) == []            # running again adds nothing
-    later = prices.update_live(tmp_path, ["AAA", "SPY"], dt.datetime(2026, 11, 20, 22, 0, tzinfo=UTC), fetch)
+    later = prices.update_live(tmp_path, ["AAA", "SPY"], dt.datetime(2026, 11, 20, 23, 0, tzinfo=UTC), fetch)
     assert [(d, t) for d, t, _ in later] == [(D[4], "AAA"), (D[4], "SPY")]
     assert prices.load_prices(tmp_path).on("AAA", D[4]) == pytest.approx(60.0)
     assert (tmp_path / prices.LIVE).read_text().splitlines()[0] == "date,ticker,tr"
@@ -415,11 +415,18 @@ def test_vendor_parsers(monkeypatch):
 
 def test_final_bar_times():
     f = prices.final_through
-    assert f("SPY", dt.datetime(2026, 11, 18, 21, 0, tzinfo=UTC)) == dt.date(2026, 11, 17)       # the close is not final yet
-    assert f("SPY", dt.datetime(2026, 11, 18, 21, 40, tzinfo=UTC)) == dt.date(2026, 11, 18)
+    assert f("SPY", dt.datetime(2026, 11, 18, 21, 5, tzinfo=UTC)) == dt.date(2026, 11, 17)       # minutes after the winter close: not final yet
+    assert f("SPY", dt.datetime(2026, 11, 18, 22, 29, tzinfo=UTC)) == dt.date(2026, 11, 17)
+    assert f("SPY", dt.datetime(2026, 11, 18, 22, 30, tzinfo=UTC)) == dt.date(2026, 11, 18)
+    assert f("SPY", dt.datetime(2026, 7, 15, 21, 0, tzinfo=UTC)) == dt.date(2026, 7, 14)         # summer: an hour after the close is still too early
     assert f("BTC-USD", dt.datetime(2026, 11, 18, 23, 59, tzinfo=UTC)) == dt.date(2026, 11, 17)
-    assert f("BTC-USD", dt.datetime(2026, 11, 19, 0, 6, tzinfo=UTC)) == dt.date(2026, 11, 18)
+    assert f("BTC-USD", dt.datetime(2026, 11, 19, 0, 29, tzinfo=UTC)) == dt.date(2026, 11, 17)
+    assert f("BTC-USD", dt.datetime(2026, 11, 19, 0, 30, tzinfo=UTC)) == dt.date(2026, 11, 18)
+    assert f("000660.KS", dt.datetime(2026, 11, 18, 6, 45, tzinfo=UTC)) == dt.date(2026, 11, 17)
     assert f("000660.KS", dt.datetime(2026, 11, 18, 7, 30, tzinfo=UTC)) == dt.date(2026, 11, 18)
+    for run in (dt.datetime(2026, 11, 19, 1, 7, tzinfo=UTC), dt.datetime(2026, 7, 16, 1, 7, tzinfo=UTC)):   # the scheduled slot, winter and summer
+        day = run.date() - dt.timedelta(days=1)
+        assert {f(t, run) for t in ("SPY", "BTC-USD", "KRW=X", "000660.KS", "SKH-USD")} == {day}
 
 
 def test_days_are_published_only_once_every_held_price_is_final(calls, store):
