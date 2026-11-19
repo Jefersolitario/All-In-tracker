@@ -1,0 +1,42 @@
+name: episode-catalogue
+
+# Keeps data/episodes.csv up to date from the publisher's feed, so the screening job knows what has been published and when.
+on:
+  schedule:
+    - cron: "23 */4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: episode-catalogue
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e .
+      - name: Append newly published episodes
+        run: python -m allin.cli episodes
+      - name: Commit when an episode was added
+        run: |
+          if git diff --quiet -- data/episodes.csv; then
+            echo "No new episode."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/episodes.csv
+            git commit -m "catalogue: $(git diff --cached --numstat -- data/episodes.csv | cut -f1) new episode(s)"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi

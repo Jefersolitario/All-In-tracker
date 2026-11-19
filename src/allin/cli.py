@@ -4,6 +4,8 @@
     python -m allin.cli run --fetch         first append the latest final daily prices
     python -m allin.cli run --out gs://bucket/all-in-tracker      publish somewhere else (needs gcsfs)
     python -m allin.cli status              print the book as it stands: what is held, since when, until when
+    python -m allin.cli stamp               give new calls the time they reached the ledger (the scheduled job does this)
+    python -m allin.cli episodes            append newly published episodes to data/episodes.csv from the publisher's feed
 """
 from __future__ import annotations
 
@@ -19,8 +21,8 @@ import tomllib
 
 import polars as pl
 
-from . import contract, engine, prices
-from .ledger import NY, Call, load_calls, plus_year
+from . import contract, engine, episodes, prices
+from .ledger import Call, load_calls, plus_year
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DAYS_PER_YEAR = 252
@@ -33,6 +35,7 @@ def load_config(path: pathlib.Path) -> dict:
     cfg["backtest_start"] = dt.date.fromisoformat(cfg["backtest_start"])
     cfg["paper_start"] = dt.date.fromisoformat(cfg["paper_start"])
     cfg["start_cash"] = float(cfg["start_cash"])
+    cfg["recovered_calls_through"] = int(cfg.get("recovered_calls_through", 0))
     ids = [s["id"] for s in cfg["strategy"]]
     if len(set(ids)) != len(ids):
         raise ValueError("strategy ids must be unique")
@@ -53,15 +56,41 @@ def fingerprint(files: list[pathlib.Path]) -> str:
     return h.hexdigest()[:10]
 
 
+def is_pending(call: Call, cfg: dict) -> bool:
+    """A call added after the recovered backtest that has no stamp yet: it is on file but not traded."""
+    return call.status == "active" and call.call_id > cfg["recovered_calls_through"] and call.recorded_utc is None
+
+
 def check_ledger(calls: list[Call], cfg: dict, now_utc: dt.datetime) -> None:
-    """Refuse a ledger that would buy at a price already known when the call was written down."""
+    """Refuse a ledger whose timestamps cannot be right."""
     for c in calls:
+        if c.published_utc > now_utc:
+            raise ValueError(f"call {c.call_id}: published_utc is in the future")
         if c.recorded_utc is not None and c.recorded_utc > now_utc:
             raise ValueError(f"call {c.call_id}: recorded_utc is in the future")
         if c.recorded_utc is not None and c.recorded_utc < c.published_utc:
             raise ValueError(f"call {c.call_id}: recorded before the episode was published")
-        if c.status == "active" and c.recorded_utc is None and c.published_utc.astimezone(NY).date() >= cfg["paper_start"]:
-            raise ValueError(f"call {c.call_id}: an episode published on or after the paper start needs recorded_utc")
+
+
+def stamp_calls(path: str | pathlib.Path, cfg: dict, now_utc: dt.datetime) -> list[int]:
+    """Write the current time into `recorded_utc` of every new call that has none. Returns the ids stamped.
+
+    A call is bought at the close of the first session after its stamp, so the stamp has to be the moment the line
+    became part of the live ledger. The scheduled job runs this on `main`; nothing else should fill the field in.
+    Every other byte of the file is left as it was.
+    """
+    with open(path, newline="", encoding="utf-8") as f:
+        rows = list(csv.reader(f))
+    header = rows[0]
+    i_id, i_status, i_rec = header.index("call_id"), header.index("status"), header.index("recorded_utc")
+    done = []
+    for r in rows[1:]:
+        if int(r[i_id]) > cfg["recovered_calls_through"] and r[i_status] == "active" and not r[i_rec].strip():
+            r[i_rec] = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"); done.append(int(r[i_id]))
+    if done:
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f, lineterminator="\n").writerows(rows)
+    return done
 
 
 def tickers_to_update(positions: list[engine.Position], store: prices.Prices, benchmark: str) -> list[str]:
@@ -186,10 +215,11 @@ def build(calls: list[Call], store: prices.Prices, cfg: dict, now_utc: dt.dateti
     return {"daily": daily, "summary": summary, "books": books, "through": through}
 
 
-def publish(out: str, cfg: dict, built: dict, store: prices.Prices, n_calls: int, allow_restate: bool = False, now_utc: dt.datetime | None = None) -> None:
+def publish(out: str, cfg: dict, built: dict, store: prices.Prices, n_calls: int, allow_restate: bool = False, now_utc: dt.datetime | None = None,
+            calls_path: str | pathlib.Path | None = None, config_path: str | pathlib.Path | None = None) -> None:
     now_utc = now_utc or dt.datetime.now(dt.timezone.utc)
-    code = fingerprint([*ROOT.glob("src/allin/*.py"), ROOT / "strategies.toml"])
-    ledger = fingerprint([ROOT / "calls.csv"])
+    code = fingerprint([*ROOT.glob("src/allin/*.py"), pathlib.Path(config_path or ROOT / "strategies.toml")])
+    ledger = fingerprint([pathlib.Path(calls_path or ROOT / "calls.csv")])
     for s in cfg["strategy"]:
         if not s.get("paper", False):
             continue
@@ -217,7 +247,8 @@ def show(built: dict, store: prices.Prices) -> None:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="allin")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name, text in (("run", "recompute and publish"), ("status", "print the book without writing anything")):
+    for name, text in (("run", "recompute and publish"), ("status", "print the book without writing anything"),
+                       ("stamp", "give new calls the time they reached the ledger"), ("episodes", "append newly published episodes to the catalogue")):
         p = sub.add_parser(name, help=text)
         p.add_argument("--data", default=str(ROOT / "data"))
         p.add_argument("--calls", default=str(ROOT / "calls.csv"))
@@ -226,12 +257,28 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--fetch", action="store_true", help="append the latest final daily prices first")
             p.add_argument("--out", default=str(ROOT / "results"), help="results root: a folder or any fsspec URI")
             p.add_argument("--allow-restate", action="store_true", help="permit changes to already published days")
+        if name == "episodes":
+            p.add_argument("--feed", default=episodes.FEED, help="feed address, or a saved copy of the feed")
     a = ap.parse_args(argv)
 
     now = dt.datetime.now(dt.timezone.utc)
     cfg = load_config(pathlib.Path(a.config))
-    calls = load_calls(a.calls)
-    check_ledger(calls, cfg, now)
+    if a.cmd == "episodes":
+        xml = pathlib.Path(a.feed).read_bytes() if pathlib.Path(a.feed).exists() else episodes.fetch_feed(a.feed)
+        added = episodes.update_catalogue(pathlib.Path(a.data) / "episodes.csv", episodes.parse_feed(xml))
+        for row in added:
+            print(f"new episode: {row[0]} {row[2]}")
+        print(f"catalogue: {len(added)} episodes added")
+        return 0
+    if a.cmd == "stamp":
+        done = stamp_calls(a.calls, cfg, now)
+        check_ledger(load_calls(a.calls), cfg, now)
+        print(f"stamped calls {done} at {now:%Y-%m-%dT%H:%M:%SZ}" if done else "no call is waiting for a stamp")
+        return 0
+    ledger = load_calls(a.calls)
+    check_ledger(ledger, cfg, now)
+    waiting = [c for c in ledger if is_pending(c, cfg)]
+    calls = [c for c in ledger if not is_pending(c, cfg)]
     store = prices.load_prices(a.data)
     if a.cmd == "run" and a.fetch:
         added = prices.update_live(a.data, tickers_to_update(engine.plan(calls, store.sessions()), store, cfg.get("benchmark", "SPY")), now)
@@ -243,8 +290,10 @@ def main(argv: list[str] | None = None) -> int:
                                "Fix the price source, or close the call with forced_exit if the ticker stopped trading.")
     built = build(calls, store, cfg, now, load_bills(a.data))
     if a.cmd == "run":
-        publish(a.out, cfg, built, store, len(calls), allow_restate=a.allow_restate, now_utc=now)
+        publish(a.out, cfg, built, store, len(ledger), allow_restate=a.allow_restate, now_utc=now, calls_path=a.calls, config_path=a.config)
     show(built, store)
+    for c in waiting:
+        print(f"call {c.call_id} ({c.speaker}: {c.call}) is on file and not traded yet: it has no stamp")
     if a.cmd == "status":
         for sid, (book, res) in built["books"].items():
             print(f"\n{sid}, {book} book at the close of {res.dates[-1]}:")

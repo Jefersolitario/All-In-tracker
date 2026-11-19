@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    paths-ignore: ["results/**", "data/prices_live.csv"]
+    paths-ignore: ["results/**", "data/prices_live.csv", "data/episodes.csv"]
   pull_request:
 
 jobs:

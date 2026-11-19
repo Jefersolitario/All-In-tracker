@@ -1,6 +1,6 @@
 name: paper-trading
 
-# After each US session: appends the day's final prices, advances the paper book and commits the results.
+# After each US session: stamps new calls, appends the day's final prices, advances the paper book and commits the results.
 # The run is idempotent: a late, skipped or repeated run only delays the record, it never changes it.
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
     - cron: "7 7 * * 2-6"    # catch-up in case the first run was dropped
   push:
     branches: [main]
-    paths: ["calls.csv", "strategies.toml"]   # a new call or a rule change is republished straight away
+    paths: ["calls.csv", "strategies.toml"]   # a new call or a rule change is stamped and republished straight away
   workflow_dispatch:
 
 permissions:
@@ -24,23 +24,42 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main            # always the latest main, also for a run that waited in the queue
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install
-        run: pip install -e .
-      - name: Fetch final prices, advance the paper book, write results
-        run: python -m allin.cli run --fetch
-      - name: Commit when a day was added or the ledger or the rules changed
         run: |
+          pip install -e .
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Stamp new calls with the time they reached main
+        # committed on its own and first, so the stamp survives even if the price download below fails
+        run: |
+          python -m allin.cli stamp
+          if ! git diff --quiet -- calls.csv; then
+            git add calls.csv
+            git commit -m "ledger: stamp new calls"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+      - name: Fetch final prices, advance the paper book, write results
+        run: python -m allin.cli run --fetch
+      - name: Commit when a day was published, prices were added or the ledger or the rules changed
+        run: |
+          through() { python -c "import json,sys; print(json.loads(sys.stdin.read())['data_through'])"; }
+          before=$(git show HEAD:results/index.json 2>/dev/null | through 2>/dev/null || echo none)
+          after=$(through < results/index.json)
           git add -A data results
           # manifests carry fingerprints of the code, strategies.toml and calls.csv, so they change only with those
-          if git diff --cached --quiet -- data/prices_live.csv ':(glob)results/*/manifest.json'; then
-            echo "No new final day and no change to the ledger or the rules."
-            git restore --staged . && git checkout -- results
+          if [ "$before" = "$after" ] && git diff --cached --quiet -- data/prices_live.csv ':(glob)results/*/manifest.json'; then
+            echo "No new day, no new price and no change to the ledger or the rules."
+            git reset -q
+            git checkout -- results
+            git clean -fdq results
           else
-            git commit -m "paper: prices and results through $(python -c "import json; print(json.load(open('results/index.json'))['data_through'])")"
-            git push
+            git commit -m "paper: prices and results through $after"
+            git pull --rebase origin main
+            git push origin HEAD:main
           fi

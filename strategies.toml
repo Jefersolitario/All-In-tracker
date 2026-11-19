@@ -5,7 +5,9 @@ source = "all-in-tracker"
 backtest_start = "2021-04-19"   # entry day of the first call in the ledger
 paper_start = "2026-11-19"      # the paper book starts in cash and buys the calls open at this day's close; committed before that close
 start_cash = 10000              # USD, one shared portfolio
+recovered_calls_through = 49    # calls up to this id are the backtest and enter by episode date; later ones wait for a stamp
 benchmark = "SPY"
+screening_start = "2026-09-26"   # episodes published before this day were screened for the recovered backtest; later ones are tracked in data/screening_log.csv
 
 [[strategy]]
 id = "allin_12m"

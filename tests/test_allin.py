@@ -10,7 +10,7 @@ import shutil
 import polars as pl
 import pytest
 
-from allin import cli, contract, engine, ledger, prices
+from allin import cli, contract, engine, episodes, ledger, prices
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MARK = dt.date(2026, 9, 25)          # the day the recovered backtest marked its open calls
@@ -90,15 +90,109 @@ def test_forced_exit_closes_early(store):
     assert ledger.exit_date(dt.date(2025, 1, 6), s, forced=dt.date(2027, 1, 1)) == dt.date(2026, 1, 6)   # the rule exit comes first
 
 
-def test_ledger_check_refuses_backdated_calls(cfg):
+def test_ledger_check_refuses_impossible_timestamps(cfg):
     now = dt.datetime(2026, 12, 1, tzinfo=UTC)
-    with pytest.raises(ValueError, match="needs recorded_utc"):
-        cli.check_ledger([make_call(published="2026-11-21T02:00:00Z")], cfg, now)
-    with pytest.raises(ValueError, match="in the future"):
+    with pytest.raises(ValueError, match="recorded_utc is in the future"):
         cli.check_ledger([make_call(published="2026-11-21T02:00:00Z", recorded="2026-12-05T00:00:00Z")], cfg, now)
     with pytest.raises(ValueError, match="before the episode"):
         cli.check_ledger([make_call(published="2026-11-21T02:00:00Z", recorded="2026-11-20T00:00:00Z")], cfg, now)
-    cli.check_ledger([make_call(published="2026-11-21T02:00:00Z", recorded="2026-11-22T00:00:00Z")], cfg, now)
+    with pytest.raises(ValueError, match="published_utc is in the future"):
+        cli.check_ledger([make_call(published="2026-12-02T02:00:00Z")], cfg, now)
+    cli.check_ledger([make_call(published="2026-11-21T02:00:00Z", recorded="2026-11-22T00:00:00Z"), make_call(call_id=901, published="2026-11-21T02:00:00Z")], cfg, now)
+
+
+def test_a_new_call_is_on_file_but_not_traded_until_it_is_stamped(calls, cfg):
+    assert cfg["recovered_calls_through"] == 49
+    assert not any(cli.is_pending(c, cfg) for c in calls if c.call_id <= 49)          # the backtest ledger enters by episode date
+    new = make_call(call_id=50, published="2026-11-21T02:00:00Z")
+    assert cli.is_pending(new, cfg)
+    assert not cli.is_pending(dataclasses.replace(new, status="excluded"), cfg)
+    assert not cli.is_pending(dataclasses.replace(new, recorded_utc=dt.datetime(2026, 11, 22, 9, 0, tzinfo=UTC)), cfg)
+
+
+def test_stamping_fills_only_new_empty_lines_and_changes_nothing_else(tmp_path, cfg):
+    path = tmp_path / "calls.csv"
+    original = (ROOT / "calls.csv").read_text(encoding="utf-8")
+    extra = ("50,guid-a,2026-11-21T02:35:00Z,Friedberg,Uranium,URA:1,active,,,,\"Says he is buying; a note, with a comma.\"\n"
+             "51,guid-b,2026-11-21T02:35:00Z,Jason,Something private,SPY:1,excluded,,,,\n"
+             "52,guid-c,2026-11-23T20:00:00Z,Chamath,Copper,CPER:1,active,2026-11-24T05:00:00Z,,,\n")
+    path.write_text(original + extra, encoding="utf-8")
+    when = dt.datetime(2026, 11, 22, 8, 15, 30, tzinfo=UTC)                        # Sunday morning in Dubai, still Sunday in New York
+    assert cli.stamp_calls(path, cfg, when) == [50]
+    after = path.read_text(encoding="utf-8")
+    assert after == original + extra.replace("URA:1,active,,", "URA:1,active,2026-11-22T08:15:30Z,")
+    assert cli.stamp_calls(path, cfg, when + dt.timedelta(days=1)) == []          # a stamp is never moved
+    assert path.read_text(encoding="utf-8") == after
+    stamped = {c.call_id: c for c in ledger.load_calls(path)}
+    sessions = weekdays(dt.date(2026, 11, 16), 15)
+    assert ledger.entry_date(stamped[50], sessions) == dt.date(2026, 11, 23)       # merged on the weekend: bought at Monday's close
+    assert ledger.entry_date(stamped[52], sessions) == dt.date(2026, 11, 25)       # stamped just after midnight New York time on Tuesday: Wednesday
+    assert stamped[46].recorded_utc is None                                        # the backtest ledger is left alone
+
+
+def test_a_pending_call_does_not_reach_the_books(tmp_path, capsys):
+    folder = tmp_path / "repo"; folder.mkdir()
+    path = folder / "calls.csv"
+    path.write_text((ROOT / "calls.csv").read_text(encoding="utf-8") + "50,guid-a,2026-11-18T22:00:00Z,Friedberg,Uranium,URA:1,active,,,,\n", encoding="utf-8")
+    assert cli.main(["run", "--calls", str(path), "--out", str(tmp_path / "out")]) == 0
+    assert "call 50 (Friedberg: Uranium) is on file and not traded yet" in capsys.readouterr().out
+    with_pending = pl.read_parquet(tmp_path / "out" / "allin_12m" / "daily.parquet")
+    assert cli.main(["run", "--out", str(tmp_path / "plain")]) == 0
+    assert with_pending.equals(pl.read_parquet(tmp_path / "plain" / "allin_12m" / "daily.parquet"))
+    assert json.loads((tmp_path / "out" / "allin_12m" / "manifest.json").read_text())["calls_in_ledger"] == 50
+
+
+FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>show</title>
+<item><title>Weekly   show &amp; more</title><guid isPermaLink="false">g-new-2</guid><link>https://example.com/2</link>
+  <pubDate>Fri, 20 Nov 2026 21:35:00 -0500</pubDate><enclosure url="https://example.com/2.mp3" length="1" type="audio/mpeg"/></item>
+<item><title>An interview</title><guid>g-new-1</guid><link>https://example.com/1</link><pubDate>Thu, 19 Nov 2026 23:10:00 +0000</pubDate></item>
+<item><title>A retitled old episode</title><guid>22b845c5-e5be-4dd1-b4dd-7f3843120d12</guid><pubDate>Tue, 17 Nov 2026 21:43:00 +0000</pubDate></item>
+</channel></rss>"""
+
+
+def test_catalogue_appends_new_episodes_and_never_rewrites(tmp_path):
+    path = tmp_path / "episodes.csv"; shutil.copy(ROOT / "data" / "episodes.csv", path)
+    before = path.read_text(encoding="utf-8")
+    rows = episodes.parse_feed(FEED)
+    assert [r[1] for r in rows] == ["22b845c5-e5be-4dd1-b4dd-7f3843120d12", "g-new-1", "g-new-2"]      # oldest first
+    added = episodes.update_catalogue(path, rows)
+    assert added == [("2026-11-19T23:10:00Z", "g-new-1", "An interview", "https://example.com/1", ""),
+                     ("2026-11-21T02:35:00Z", "g-new-2", "Weekly show & more", "https://example.com/2", "https://example.com/2.mp3")]
+    after = path.read_text(encoding="utf-8")
+    assert after.startswith(before) and after.count("\n") == before.count("\n") + 2                    # the stored title is kept
+    assert episodes.update_catalogue(path, rows) == []
+    feed_file = tmp_path / "feed.xml"; feed_file.write_bytes(FEED)
+    assert cli.main(["episodes", "--data", str(tmp_path), "--feed", str(feed_file)]) == 0
+    assert path.read_text(encoding="utf-8") == after
+
+
+def test_feed_parser_refuses_what_it_should_not_read():
+    with pytest.raises(ValueError, match="document type or entities"):
+        episodes.parse_feed(b'<?xml version="1.0"?><!DOCTYPE rss [<!ENTITY a "aaaa">]><rss><channel><item><title>&a;</title></item></channel></rss>')
+    with pytest.raises(ValueError, match="missing"):
+        episodes.parse_feed(b"<rss><channel><item><title>no guid</title><pubDate>Thu, 19 Nov 2026 23:10:00 +0000</pubDate></item></channel></rss>")
+    with pytest.raises(ValueError, match="duplicate"):
+        episodes.parse_feed(FEED.replace(b"g-new-2", b"g-new-1"))
+    with pytest.raises(ValueError, match="no time zone"):
+        episodes.parse_feed(FEED.replace(b"23:10:00 +0000", b"23:10:00 -0000"))
+
+
+def test_screening_log_agrees_with_the_catalogue_and_the_ledger(calls):
+    catalogue = {r["guid"]: r for r in episodes.load_catalogue(ROOT / "data" / "episodes.csv")}
+    by_id = {c.call_id: c for c in calls}
+    with open(ROOT / "data" / "screening_log.csv", newline="", encoding="utf-8") as f:
+        log = list(csv.DictReader(f))
+    assert len({r["guid"] for r in log}) == len(log) >= 17
+    start = cli.load_config(ROOT / "strategies.toml")["screening_start"]
+    for r in log:
+        assert catalogue[r["guid"]]["published_utc"] == r["published_utc"] and catalogue[r["guid"]]["title"] == r["title"]
+        assert r["published_utc"][:10] >= start and r["read_from"] in ("transcript", "summary")
+        assert (r["read_from"] == "transcript") == bool(r["transcript_url"])
+        for cid in filter(None, r["calls_added"].split(";")):
+            assert by_id[int(cid)].episode_guid == r["guid"]
+    logged = {int(i) for r in log for i in filter(None, r["calls_added"].split(";"))}
+    assert logged == {c.call_id for c in calls if c.call_id > 45}                  # every call found by screening is in the log
 
 
 # ---------- the recovered backtest ----------
