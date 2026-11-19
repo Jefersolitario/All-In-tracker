@@ -1,0 +1,26 @@
+# Every [[strategy]] is tested in the backtest. Those with paper = true are paper traded and published.
+# role = "monitor" publishes a strategy for comparison only: dashboards show it but leave it out of portfolio totals.
+# calls = "all" | "hosts" | "guests" picks which lines of calls.csv the strategy follows.
+source = "all-in-tracker"
+backtest_start = "2021-04-19"   # entry day of the first call in the ledger
+paper_start = "2026-11-19"      # the paper book starts in cash and buys the calls open at this day's close; committed before that close
+start_cash = 10000              # USD, one shared portfolio
+benchmark = "SPY"
+
+[[strategy]]
+id = "allin_12m"
+name = "All-In calls, 12-month hold"
+calls = "all"
+paper = true
+role = "monitor"
+description = "Monitoring only until it earns a place. One 10,000 USD portfolio shared equally by every investment call made on the All-In podcast that is still inside its 12 months. A call is bought at the close of the first US session after the episode is published (New York date), or after the call was written into calls.csv if that was later, and sold at the close one calendar year later. Weights are reset to equal only when a call starts or ends. Total return, before costs."
+
+[[strategy]]
+id = "allin_12m_hosts"
+name = "All-In calls by the four hosts, 12-month hold"
+calls = "hosts"
+
+[[strategy]]
+id = "allin_12m_guests"
+name = "All-In calls by guests, 12-month hold"
+calls = "guests"

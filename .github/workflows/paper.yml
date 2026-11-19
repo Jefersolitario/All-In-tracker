@@ -1,0 +1,46 @@
+name: paper-trading
+
+# After each US session: appends the day's final prices, advances the paper book and commits the results.
+# The run is idempotent: a late, skipped or repeated run only delays the record, it never changes it.
+on:
+  schedule:
+    - cron: "7 1 * * 2-6"    # 01:07 UTC, Tuesday to Saturday: after the US close and after the UTC day that crypto and currencies use
+    - cron: "7 7 * * 2-6"    # catch-up in case the first run was dropped
+  push:
+    branches: [main]
+    paths: ["calls.csv", "strategies.toml"]   # a new call or a rule change is republished straight away
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: paper-trading
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e .
+      - name: Fetch final prices, advance the paper book, write results
+        run: python -m allin.cli run --fetch
+      - name: Commit when a day was added or the ledger or the rules changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A data results
+          # manifests carry fingerprints of the code, strategies.toml and calls.csv, so they change only with those
+          if git diff --cached --quiet -- data/prices_live.csv ':(glob)results/*/manifest.json'; then
+            echo "No new final day and no change to the ledger or the rules."
+            git restore --staged . && git checkout -- results
+          else
+            git commit -m "paper: prices and results through $(python -c "import json; print(json.load(open('results/index.json'))['data_through'])")"
+            git push
+          fi
