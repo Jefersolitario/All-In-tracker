@@ -94,14 +94,35 @@ def stamp_calls(path: str | pathlib.Path, cfg: dict, now_utc: dt.datetime) -> li
     return done
 
 
-def tickers_to_update(positions: list[engine.Position], store: prices.Prices, benchmark: str) -> list[str]:
-    """Benchmark, calendar, and the legs of every call that is still open or has not entered yet."""
+def tickers_to_update(positions: list[engine.Position], store: prices.Prices, benchmark: str) -> tuple[list[str], set[str]]:
+    """What the daily job downloads: the benchmark, and the legs of every call that is still open or has not entered yet.
+    Also returns the tickers that only calls with a forced exit need; a failed download of one of those is not an error."""
     last = store.sessions()[-1]
-    need = {benchmark, prices.CALENDAR}
+    always, normal, forced = {benchmark, prices.CALENDAR}, set(), set()
     for p in positions:
-        if p.exit is None or p.exit >= last:
-            need.update(t for t, _ in p.call.legs)
-    return sorted(need)
+        legs = [t for t, _ in p.call.legs]
+        if p.exit is None or p.exit > last or (p.exit == last and any(store.on(t, last) is None for t in legs)):
+            (forced if p.call.forced_exit is not None else normal).update(legs)
+    return sorted(always | normal | forced), forced - normal - always
+
+
+def check_not_stalled(store: prices.Prices, through: dt.date, limit: int = 3) -> None:
+    """Fail when sessions pile up that cannot be published, which means a held ticker has stopped getting prices."""
+    behind = [d for d in store.sessions() if d > through]
+    if len(behind) > limit:
+        raise RuntimeError(f"{len(behind)} sessions cannot be published because a held ticker has no price: first {behind[0]}. "
+                           "Fix the price source, or give the call a forced_exit on that day if its ticker stopped trading.")
+
+
+def stale_legs(res: engine.Result, store: prices.Prices, days: int = 4) -> list[str]:
+    """Carried prices worth a look: a held leg whose latest price is more than `days` old at the last close."""
+    end = res.dates[-1]; out = []
+    for k in sorted(res.holdings):
+        for ticker, _ in res.positions[k].call.legs:
+            seen = [d for d in store._dates.get(ticker, []) if d <= end]
+            if seen and (end - seen[-1]).days > days:
+                out.append(f"call {k}: {ticker} has no price since {seen[-1]}; it is carried at that close")
+    return out
 
 
 def publishable_through(positions: list[engine.Position], store: prices.Prices, now_utc: dt.datetime) -> dt.date:
@@ -203,35 +224,40 @@ def build(calls: list[Call], store: prices.Prices, cfg: dict, now_utc: dt.dateti
     bills = bills or []
     sessions = store.sessions()
     through = publishable_through(engine.plan(calls, sessions), store, now_utc)
-    bt_end = max(d for d in sessions if d < cfg["paper_start"] and d <= through)
+    bt_end = max((d for d in sessions if d < cfg["paper_start"] and d <= through), default=None)
     bench_t = cfg.get("benchmark", "SPY")
     daily, rows, books = {}, [], {}
     for s in cfg["strategy"]:
         mine = [c for c in calls if FILTERS[s.get("calls", "all")](c)]
-        bt = engine.simulate(engine.plan(mine, sessions), store, cfg["start_cash"], end=bt_end)
-        keep = [i for i, d in enumerate(bt.dates) if d >= cfg["backtest_start"]]
-        if keep and keep[0] > 0:
-            raise ValueError(f"{s['id']}: a call enters before backtest_start")
-        bench = [store.on(bench_t, d) for d in bt.dates]
-        rows.append(summary_row(s["id"], s["name"], s["role"], bool(s.get("paper", False)), bt, bench, cfg["start_cash"], store, bills))
+        table = pl.DataFrame(schema=contract.DAILY_SCHEMA); book = None
+        plan = engine.plan(mine, sessions)
+        if bt_end is not None and any(p.entry is not None and p.entry <= bt_end for p in plan):
+            bt = engine.simulate(plan, store, cfg["start_cash"], end=bt_end)
+            if bt.dates[0] < cfg["backtest_start"]:
+                raise ValueError(f"{s['id']}: a call enters before backtest_start")
+            bench = [store.on(bench_t, d) for d in bt.dates]
+            rows.append(summary_row(s["id"], s["name"], s["role"], bool(s.get("paper", False)), bt, bench, cfg["start_cash"], store, bills))
+            table = daily_table(bt, "backtest"); book = ("backtest", bt)
         if not s.get("paper", False):
             continue
-        table = daily_table(bt, "backtest"); book = ("backtest", bt)
         plan = engine.plan(mine, sessions, not_before=cfg["paper_start"])
         if any(p.entry is not None and p.entry <= through for p in plan):
             paper = engine.simulate(plan, store, cfg["start_cash"], end=through)       # the paper book starts in cash on paper_start
             table = pl.concat([table, daily_table(paper, "paper")]); book = ("paper", paper)
-        daily[s["id"]] = table; books[s["id"]] = book
-    first = min(r["start"] for r in rows); days = [d for d in sessions if first <= d <= bt_end]
-    level = [cfg["start_cash"] * store.on(bench_t, d) / store.on(bench_t, days[0]) for d in days]
-    ref_stats = engine.stats(level, DAYS_PER_YEAR, bill_returns(bills, days))
-    rows.append({"strategy_id": f"{bench_t.lower()}_buy_hold", "name": f"{bench_t} bought on {days[0]} and held, dividends reinvested", "paper_traded": False, "role": "tested",
-                 "start": days[0], "end": bt_end, "buys": 1, "put_in": cfg["start_cash"], "pnl": ref_stats["pnl"], "return_pct": ref_stats["return_pct"],
-                 "sharpe": ref_stats["sharpe"], "sortino": ref_stats["sortino"], "max_dd": ref_stats["max_dd"], "sharpe_per_dollar": ref_stats["sharpe_per_dollar"],
-                 "placebo_p": None, "sharpe_vs_bills": ref_stats.get("sharpe_vs_bills"), "max_dd_pct": ref_stats["max_dd_pct"], "closed": 0, "wins": 0,
-                 "beta_spy": 1.0, "alpha_pct_yr": 0.0, "alpha_t": None})
+        if book is not None:                                                            # a strategy none of whose calls has entered yet publishes nothing
+            daily[s["id"]] = table; books[s["id"]] = book
+    if rows:
+        first = min(r["start"] for r in rows); days = [d for d in sessions if first <= d <= bt_end]
+        level = [cfg["start_cash"] * store.on(bench_t, d) / store.on(bench_t, days[0]) for d in days]
+        ref_stats = engine.stats(level, DAYS_PER_YEAR, bill_returns(bills, days))
+        rows.append({"strategy_id": f"{bench_t.lower()}_buy_hold", "name": f"{bench_t} bought on {days[0]} and held, dividends reinvested", "paper_traded": False, "role": "tested",
+                     "start": days[0], "end": bt_end, "buys": 1, "put_in": cfg["start_cash"], "pnl": ref_stats["pnl"], "return_pct": ref_stats["return_pct"],
+                     "sharpe": ref_stats["sharpe"], "sortino": ref_stats["sortino"], "max_dd": ref_stats["max_dd"], "sharpe_per_dollar": ref_stats["sharpe_per_dollar"],
+                     "placebo_p": None, "sharpe_vs_bills": ref_stats.get("sharpe_vs_bills"), "max_dd_pct": ref_stats["max_dd_pct"], "closed": 0, "wins": 0,
+                     "beta_spy": 1.0, "alpha_pct_yr": 0.0, "alpha_t": None})
     summary = pl.DataFrame(rows, schema_overrides={"placebo_p": pl.Float64, "sharpe_vs_bills": pl.Float64, "alpha_t": pl.Float64, "beta_spy": pl.Float64,
-                                                   "alpha_pct_yr": pl.Float64, "put_in": pl.Float64})
+                                                   "alpha_pct_yr": pl.Float64, "put_in": pl.Float64, "sharpe": pl.Float64, "sortino": pl.Float64,
+                                                   "sharpe_per_dollar": pl.Float64})
     return {"daily": daily, "summary": summary, "books": books, "through": through}
 
 
@@ -241,7 +267,7 @@ def publish(out: str, cfg: dict, built: dict, store: prices.Prices, n_calls: int
     code = fingerprint([*ROOT.glob("src/allin/*.py"), pathlib.Path(config_path or ROOT / "strategies.toml")])
     ledger = fingerprint([pathlib.Path(calls_path or ROOT / "calls.csv")])
     for s in cfg["strategy"]:
-        if not s.get("paper", False):
+        if not s.get("paper", False) or s["id"] not in built["daily"]:
             continue
         manifest = {"id": s["id"], "name": s["name"], "market": "US-listed stocks and ETFs, with some crypto and foreign shares", "currency": "USD",
                     "days_per_year": DAYS_PER_YEAR, "backtest_start": cfg["backtest_start"], "paper_start": cfg["paper_start"], "description": s.get("description", ""),
@@ -258,7 +284,8 @@ def publish(out: str, cfg: dict, built: dict, store: prices.Prices, n_calls: int
 
 def show(built: dict, store: prices.Prices) -> None:
     with pl.Config(tbl_rows=20, tbl_cols=14, float_precision=2, tbl_width_chars=220):
-        print(built["summary"].select("strategy_id", "role", "start", "end", "buys", "closed", "wins", "pnl", "return_pct", "sharpe", "sharpe_vs_bills", "max_dd_pct", "beta_spy", "alpha_pct_yr", "alpha_t"))
+        if built["summary"].height:
+            print(built["summary"].select("strategy_id", "role", "start", "end", "buys", "closed", "wins", "pnl", "return_pct", "sharpe", "sharpe_vs_bills", "max_dd_pct", "beta_spy", "alpha_pct_yr", "alpha_t"))
     for sid, table in built["daily"].items():
         paper = table.filter(pl.col("mode") == "paper")
         book, res = built["books"][sid]
@@ -279,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--fetch", action="store_true", help="append the latest final daily prices first")
             p.add_argument("--out", default=str(ROOT / "results"), help="results root: a folder or any fsspec URI")
             p.add_argument("--allow-restate", action="store_true", help="permit changes to already published days")
+            p.add_argument("--allow-jump", default="", help="tickers, comma separated, whose one-day move beyond half or double is real")
         if name == "episodes":
             p.add_argument("--feed", default=episodes.FEED, help="feed address, or a saved copy of the feed")
     a = ap.parse_args(argv)
@@ -303,19 +331,19 @@ def main(argv: list[str] | None = None) -> int:
     calls = [c for c in ledger if not is_pending(c, cfg)]
     store = prices.load_prices(a.data)
     if a.cmd == "run" and a.fetch:
-        added = prices.update_live(a.data, tickers_to_update(engine.plan(calls, store.sessions()), store, cfg.get("benchmark", "SPY")), now,
-                                   published_through=last_published(a.out))
+        need, optional = tickers_to_update(engine.plan(calls, store.sessions()), store, cfg.get("benchmark", "SPY"))
+        added = prices.update_live(a.data, need, now, published_through=last_published(a.out), optional=optional,
+                                   allow_jump={t.strip() for t in a.allow_jump.split(",") if t.strip()})
         print(f"prices: {len(added)} rows added" + (f", through {max(d for d, _, _ in added)}" if added else ""))
         store = prices.load_prices(a.data)
-        through = publishable_through(engine.plan(calls, store.sessions()), store, now)
-        behind = [d for d in store.sessions() if d > through]
-        if len(behind) > 3:
-            raise RuntimeError(f"{len(behind)} sessions cannot be published because a held ticker has no price: first {behind[0]}. "
-                               "Fix the price source, or close the call with forced_exit if the ticker stopped trading.")
+        check_not_stalled(store, publishable_through(engine.plan(calls, store.sessions()), store, now))
     built = build(calls, store, cfg, now, load_bills(a.data))
     if a.cmd == "run":
         publish(a.out, cfg, built, store, len(ledger), allow_restate=a.allow_restate, now_utc=now, calls_path=a.calls, config_path=a.config)
     show(built, store)
+    for _, res in built["books"].values():
+        for line in stale_legs(res, store):
+            print(f"::warning::{line}")                  # shows up as a warning on the run in GitHub Actions
     for c in waiting:
         print(f"call {c.call_id} ({c.speaker}: {c.call}) is on file and not traded yet: it has no stamp")
     if a.cmd == "status":

@@ -12,6 +12,7 @@ import bisect
 import csv
 import dataclasses
 import datetime as dt
+import math
 import pathlib
 from zoneinfo import ZoneInfo
 
@@ -53,7 +54,9 @@ def parse_legs(text: str) -> tuple[tuple[str, float], ...]:
         ticker, _, weight = part.strip().rpartition(":")
         if not ticker:
             raise ValueError(f"leg without a weight: {part!r}")
-        legs.append((ticker, float(weight)))
+        legs.append((ticker.strip(), float(weight)))
+        if not math.isfinite(legs[-1][1]) or legs[-1][1] == 0:
+            raise ValueError(f"leg weight must be a non-zero number: {part!r}")
     total = sum(abs(w) for _, w in legs)
     if not legs or abs(total - 1) > 1e-3:
         raise ValueError(f"absolute leg weights must sum to 1, got {total:.4f} in {text!r}")

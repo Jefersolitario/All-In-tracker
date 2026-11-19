@@ -54,7 +54,7 @@ call_id,episode_guid,published_utc,speaker,call,legs,status,recorded_utc,recover
 
 - `legs` are `TICKER:weight` pairs separated by `;`. Absolute weights sum to 1; a negative weight is a short.
 - **`recorded_utc` is a stamp, not something you type.** The daily job fills it in with the time the line reached `main`. Until then the call is on file and not traded. It is bought at the close of the first US session after the stamp's New York date, so a line merged before midnight New York time trades at the next close.
-- `forced_exit` (a date) closes a call early when its ticker stops trading. Leave it empty otherwise.
+- `forced_exit` (a date) closes a call early when its ticker stops trading. Leave it empty otherwise. See "When the job stops" below.
 - `status = excluded` keeps a call on record without trading it.
 - Never edit the legs or dates of a call that has already entered. Published days cannot change, and the run fails if they would.
 
@@ -73,14 +73,26 @@ A scheduled Claude session reads new episodes twice a day and opens a pull reque
 
 `.github/workflows/episodes.yml` runs every four hours and appends newly published episodes to `data/episodes.csv`.
 
-- A day is published only when every leg held that day has its final price for it.
-- A stored price is never replaced: new levels are chained from the last stored one with ratios of adjusted closes, so a restatement by the data vendor cannot move a published day.
-- Samsung and SK Hynix are held as dollar series built from the Seoul listings and the won-dollar rate.
+- A day is published only when every US symbol and cryptocurrency held that day has its final price for it.
+- A stored price is never replaced, and a price for a day that is already published is never added. New levels are chained from stored ones with ratios of adjusted closes, so nothing the data vendor does later can move a published day. An adjustment the vendor books late, such as a dividend, is picked up by the next bar.
+- Samsung and SK Hynix are held as dollar series built from the Seoul listings and the won-dollar rate. Over a Seoul holiday they are carried at their last close; the run prints a warning when a carried price is more than four days old.
+- A call that loses its whole stake (a short that more than doubles) is closed at nothing that day.
 - The paper book starts in cash on `paper_start`, buys the calls that are open at that close in equal parts, and sells each on its original exit day.
+
+### When the job stops
+
+The job fails on purpose instead of publishing something doubtful. GitHub emails you when it does.
+
+| Message | What happened | What to do |
+|---|---|---|
+| `N sessions cannot be published because a held ticker has no price` | A ticker stopped trading (takeover, delisting) or the vendor dropped it. | Put the first unpublished day in the call's `forced_exit`. The call is closed that day at its last price. |
+| `the bar of <day> is X times the one before it` | A one-day move beyond half or double: a split shown unadjusted, a bad print, or a real collapse. | Check the price. If it is real, run the workflow by hand with the ticker in `allow_jump`. If not, wait: the next run tries again. |
+| `stored history disagrees with the download` | The vendor's recent prices differ from the stored ones by more than 5%: a large adjustment was booked late, or the symbol now means something else. | Check the symbol. If the vendor is right, run the workflow by hand with the ticker in `allow_jump`: the next bar takes the vendor's level. If the symbol was reused, give the call a `forced_exit`. |
+| `published days would change` | A line of `calls.csv` was edited after its call entered, or a call was given a `recorded_utc` in the past. | Undo the edit. Only if the change is intended, run the workflow by hand with `allow_restate` set to `yes`. |
 
 ```
 pip install -e ".[dev]"
-pytest -q                         # 36 tests
+pytest -q                         # 50 tests
 python -m allin.cli status        # the book as it stands: what is held, since when, until when
 python -m allin.cli run           # recompute and write ./results from stored prices
 python -m allin.cli run --fetch   # the same after appending the latest final prices

@@ -10,6 +10,15 @@ on:
     branches: [main]
     paths: ["calls.csv", "strategies.toml"]   # a new call or a rule change is stamped and republished straight away
   workflow_dispatch:
+    inputs:
+      allow_jump:
+        description: "Tickers, comma separated, whose one-day move beyond half or double is real"
+        required: false
+        default: ""
+      allow_restate:
+        description: "Type yes to let this run change days that are already published"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -45,7 +54,14 @@ jobs:
             git push origin HEAD:main
           fi
       - name: Fetch final prices, advance the paper book, write results
-        run: python -m allin.cli run --fetch
+        env:
+          ALLOW_JUMP: ${{ inputs.allow_jump }}
+          ALLOW_RESTATE: ${{ inputs.allow_restate }}
+        run: |
+          args=(--fetch)
+          if [ -n "$ALLOW_JUMP" ]; then args+=(--allow-jump "$ALLOW_JUMP"); fi
+          if [ "$ALLOW_RESTATE" = "yes" ]; then args+=(--allow-restate); fi
+          python -m allin.cli run "${args[@]}"
       - name: Commit when a day was published, prices were added or the ledger or the rules changed
         run: |
           through() { python -c "import json,sys; print(json.loads(sys.stdin.read())['data_through'])"; }

@@ -7,7 +7,7 @@ import datetime as dt
 import math
 
 from .ledger import Call, entry_date, exit_date
-from .prices import Prices, us_listed
+from .prices import Prices, needs_own_day
 
 
 MAX_STALE_DAYS = 10     # a leg is valued with its latest price up to this many days old: weekends, and holidays abroad
@@ -73,7 +73,12 @@ def call_value(call: Call, entry: dt.date, day: dt.date, prices: Prices) -> floa
 
 
 def complete_through(positions: list[Position], prices: Prices) -> dt.date:
-    """Last session on which every open position can be valued with that day's own US prices."""
+    """Last session on which every open position can be valued for good.
+
+    A US symbol or a cryptocurrency needs its own price for that day. A dollar series built from a foreign listing is
+    carried at its last close for up to MAX_STALE_DAYS, and so is any leg of a call with a forced exit: its ticker may
+    have stopped trading, and the call is closed at the last price it had.
+    """
     sessions = prices.sessions()
     for d in reversed(sessions):
         ok = True
@@ -81,7 +86,8 @@ def complete_through(positions: list[Position], prices: Prices) -> dt.date:
             if p.entry is None or p.entry > d or (p.exit is not None and p.exit < d):
                 continue
             for ticker, _ in p.call.legs:
-                if (us_listed(ticker) and prices.on(ticker, d) is None) or prices.asof(ticker, d) is None:
+                own = needs_own_day(ticker) and p.call.forced_exit is None
+                if (own and prices.on(ticker, d) is None) or prices.asof(ticker, d, MAX_STALE_DAYS) is None:
                     ok = False
         if ok:
             return d
@@ -133,9 +139,11 @@ def stats(equity: list[float], days_per_year: int = 252, rf_daily: list[float] |
     n = len(pnl)
 
     def sharpe(x):
+        if n < 2:
+            return None                                # one day has no spread
         m = sum(x) / n; sd = math.sqrt(sum((v - m) ** 2 for v in x) / (n - 1))
         return m / sd * math.sqrt(days_per_year) if sd > 0 else None
-    mean = sum(pnl) / n; down = math.sqrt(sum(min(v, 0.0) ** 2 for v in pnl) / n)
+    mean = sum(pnl) / n if n else 0.0; down = math.sqrt(sum(min(v, 0.0) ** 2 for v in pnl) / n) if n else 0.0
     peak = equity[0]; dd_usd = 0.0; dd_pct = 0.0
     for v in equity:
         peak = max(peak, v); dd_usd = max(dd_usd, peak - v); dd_pct = min(dd_pct, v / peak - 1)

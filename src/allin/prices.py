@@ -20,9 +20,22 @@ CALENDAR = "SPY"                 # its trading days are the US sessions
 SYNTHETIC = {"SKH-USD": ("000660.KS", "KRW=X"), "SAMSUNG-USD": ("005930.KS", "KRW=X")}
 
 
+JUMP_BAND = (0.5, 2.0)          # a one-day move outside this is taken for a data error until someone confirms it
+RATE_BAND = (0.9, 1.1)          # the same for a currency rate
+ANCHOR_BACK = 5                 # new levels are chained from the stored level this many bars back
+
+
 def us_listed(ticker: str) -> bool:
-    """US-exchange symbols have no suffix; crypto pairs (-USD), currencies (=X) and foreign listings (.KS) do."""
-    return not any(ch in ticker for ch in "-=.")
+    """A US exchange symbol. Crypto pairs end in -USD, currencies in =X and foreign listings carry a dot suffix (.KS);
+    a dash alone marks a US share class (BRK-B)."""
+    return not (ticker.endswith("-USD") or ticker.endswith("=X") or "." in ticker)
+
+
+def needs_own_day(ticker: str) -> bool:
+    """True when the ticker must have a price of its own on every US session before that session is published:
+    US symbols, and cryptocurrencies, which trade every day. The dollar series built from foreign listings do not,
+    because their home market keeps other holidays; they are carried at their last close."""
+    return ticker not in SYNTHETIC and not ticker.endswith("=X") and "." not in ticker
 
 
 class Prices:
@@ -132,51 +145,79 @@ def yahoo_history(symbol: str, start: dt.date, attempts: int = 3, pause: float =
     raise RuntimeError(f"no price history for {symbol}: " + "; ".join(errors[-4:]))
 
 
-def _chain(stored_dates, stored_vals, bars, cutoff, ticker, tol=0.02):
-    """New (date, level) rows after the last stored date, continuing the stored level with ratios of adjusted closes."""
+def _chain(stored_dates, stored_vals, bars, cutoff, ticker, tol=0.05, trust=False):
+    """New (date, level) rows after the last stored date, continuing the stored levels with ratios of adjusted closes.
+
+    The chain starts a few stored bars back, not at the last one. Where the vendor and the store agree that changes
+    nothing. Where the vendor has since adjusted those days (a dividend booked a day late, a corrected close), the
+    next new level picks the difference up, and no stored row is touched.
+    """
     adj = {d: a for d, _, a in bars}
     if not stored_dates:                                          # a ticker seen for the first time: start from the vendor's level
         return [(d, a) for d, a in sorted(adj.items()) if d <= cutoff]
     last = stored_dates[-1]
     if last not in adj:
         raise RuntimeError(f"{ticker}: the download does not reach back to the last stored day {last}")
-    # the vendor's recent moves must agree with what is stored, or the symbol now means something else
-    for d, v in list(zip(stored_dates, stored_vals))[-6:-1]:
-        if d in adj and abs((stored_vals[-1] / v) / (adj[last] / adj[d]) - 1) > tol:
-            raise RuntimeError(f"{ticker}: stored history disagrees with the download between {d} and {last}")
-    return [(d, stored_vals[-1] * a / adj[last]) for d, a in sorted(adj.items()) if last < d <= cutoff]
+    recent = [(d, v) for d, v in list(zip(stored_dates, stored_vals))[-(ANCHOR_BACK + 1):] if d in adj]
+    # the vendor's recent moves must roughly agree with what is stored, or the symbol now means something else
+    for d, v in recent[:-1]:
+        if not trust and abs((stored_vals[-1] / v) / (adj[last] / adj[d]) - 1) > tol:
+            raise RuntimeError(f"{ticker}: stored history disagrees with the download between {d} and {last}. "
+                               f"If the vendor is right (a large adjustment booked late), run again with --allow-jump {ticker}.")
+    anchor_day, anchor_level = recent[0]
+    return [(d, anchor_level * a / adj[anchor_day]) for d, a in sorted(adj.items()) if last < d <= cutoff]
 
 
 def update_live(data_dir: str | pathlib.Path, tickers: list[str], now_utc: dt.datetime | None = None, fetch=yahoo_history,
-                published_through: dt.date | None = None) -> list[tuple[dt.date, str, float]]:
-    """Append final daily levels for `tickers` to the live file. Returns the rows added.
+                published_through: dt.date | None = None, allow_jump: frozenset[str] | set[str] = frozenset(),
+                optional: frozenset[str] | set[str] = frozenset()) -> list[tuple[dt.date, str, float]]:
+    """Append final daily levels for `tickers` to the live file. Returns the rows added. Nothing is written if anything fails.
 
     A bar dated on or before `published_through` is never stored: that day has been published without it, and a price
     that turns up late (a foreign bar the vendor had not posted yet) would change a published day. The next bar chains
     over the gap, so the level stays right and the missed move is recognised one bar later.
+
+    A new bar that is less than half or more than twice the bar before it is refused unless its ticker is in
+    `allow_jump`: an unadjusted split or a bad print would otherwise be stored for good. The same list lets the
+    vendor's version win when its recent history disagrees with the stored one by more than the tolerance.
+    A ticker in `optional` (its call has a forced exit, so it may have stopped trading) is skipped when the download fails.
     """
     now_utc = now_utc or dt.datetime.now(dt.timezone.utc)
     d = pathlib.Path(data_dir); prices = load_prices(d); added: list[tuple[dt.date, str, float]] = []
     for t in sorted(set(tickers)):
         dates = prices._dates.get(t, []); vals = prices._values.get(t, [])
         start = (dates[-1] if dates else now_utc.date() - dt.timedelta(days=120)) - dt.timedelta(days=12)
-        if t in SYNTHETIC:
-            local, fx = SYNTHETIC[t]
-            lb = fetch(local, start); fb = fetch(fx, start - dt.timedelta(days=5))
-            fxd = sorted((x, c) for x, c, _ in fb)
+        try:
+            if t in SYNTHETIC:
+                local, fx = SYNTHETIC[t]
+                lb = fetch(local, start); fb = fetch(fx, start - dt.timedelta(days=5))
+                fxd = sorted((x, c) for x, c, _ in fb)
+                for (x0, r0), (x1, r1) in zip(fxd, fxd[1:]):
+                    if not RATE_BAND[0] <= r1 / r0 <= RATE_BAND[1]:
+                        raise RuntimeError(f"{fx}: the rate on {x1} is {r1 / r0:.2f} times the one before it")
 
-            def rate(day, fxd=fxd):
-                i = bisect.bisect_right([x for x, _ in fxd], day) - 1
-                if i < 0:
-                    raise RuntimeError(f"{fx}: no rate on or before {day}")
-                return fxd[i][1]
-            bars = [(x, c / rate(x), a / rate(x)) for x, c, a in lb]      # dollars: local level divided by local units per dollar
-            cutoff = min(final_through(local, now_utc), final_through(fx, now_utc))
-        else:
-            bars = fetch(t, start); cutoff = final_through(t, now_utc)
-        for day, level in _chain(dates, vals, bars, cutoff, t):
-            if published_through is None or day > published_through:
-                added.append((day, t, level))
+                def rate(day, fxd=fxd):
+                    i = bisect.bisect_right([x for x, _ in fxd], day) - 1
+                    if i < 0:
+                        raise RuntimeError(f"{fx}: no rate on or before {day}")
+                    return fxd[i][1]
+                bars = [(x, c / rate(x), a / rate(x)) for x, c, a in lb]      # dollars: local level divided by local units per dollar
+                cutoff = final_through(t, now_utc)
+            else:
+                bars = fetch(t, start); cutoff = final_through(t, now_utc)
+        except Exception as e:  # noqa: BLE001
+            if t in optional:
+                print(f"{t}: no download ({e}); its call has a forced exit, so the last stored price is carried")
+                continue
+            raise
+        before = vals[-1] if vals else None
+        for day, level in _chain(dates, vals, bars, cutoff, t, trust=t in allow_jump):
+            if published_through is not None and day <= published_through:
+                continue
+            if before is not None and t not in allow_jump and not JUMP_BAND[0] <= level / before <= JUMP_BAND[1]:
+                raise RuntimeError(f"{t}: the bar of {day} is {level / before:.2f} times the one before it. "
+                                   f"Nothing was stored. If the move is real, run again with --allow-jump {t}.")
+            added.append((day, t, level)); before = level
     if added:
         live = d / LIVE; new_file = not live.exists()
         with live.open("a", encoding="utf-8", newline="") as f:
