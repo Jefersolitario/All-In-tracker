@@ -11,6 +11,7 @@ import datetime as dt
 import gzip
 import io
 import pathlib
+import statistics
 import time
 
 SNAPSHOT = "prices_snapshot.csv.gz"
@@ -22,7 +23,7 @@ SYNTHETIC = {"SKH-USD": ("000660.KS", "KRW=X"), "SAMSUNG-USD": ("005930.KS", "KR
 
 JUMP_BAND = (0.5, 2.0)          # a one-day move outside this is taken for a data error until someone confirms it
 RATE_BAND = (0.9, 1.1)          # the same for a currency rate
-ANCHOR_BACK = 5                 # new levels are chained from the stored level this many bars back
+ANCHOR_BACK = 5                 # a new level is the middle one implied by the last stored bar and this many before it
 
 
 def us_listed(ticker: str) -> bool:
@@ -148,9 +149,10 @@ def yahoo_history(symbol: str, start: dt.date, attempts: int = 3, pause: float =
 def _chain(stored_dates, stored_vals, bars, cutoff, ticker, tol=0.05, trust=False):
     """New (date, level) rows after the last stored date, continuing the stored levels with ratios of adjusted closes.
 
-    The chain starts a few stored bars back, not at the last one. Where the vendor and the store agree that changes
-    nothing. Where the vendor has since adjusted those days (a dividend booked a day late, a corrected close), the
-    next new level picks the difference up, and no stored row is touched.
+    Each of the last few stored bars implies a level for a new day (its stored level times the vendor's ratio from that
+    bar to the new day). Where the vendor and the store agree, all of them imply the same level. The middle one is used,
+    so a single stored bar the vendor has since adjusted (a dividend booked a day late, a corrected close) neither loses
+    the adjustment nor shows up again when it is the bar chained from. No stored row is ever touched.
     """
     adj = {d: a for d, _, a in bars}
     if not stored_dates:                                          # a ticker seen for the first time: start from the vendor's level
@@ -164,8 +166,7 @@ def _chain(stored_dates, stored_vals, bars, cutoff, ticker, tol=0.05, trust=Fals
         if not trust and abs((stored_vals[-1] / v) / (adj[last] / adj[d]) - 1) > tol:
             raise RuntimeError(f"{ticker}: stored history disagrees with the download between {d} and {last}. "
                                f"If the vendor is right (a large adjustment booked late), run again with --allow-jump {ticker}.")
-    anchor_day, anchor_level = recent[0]
-    return [(d, anchor_level * a / adj[anchor_day]) for d, a in sorted(adj.items()) if last < d <= cutoff]
+    return [(d, statistics.median(v * a / adj[day] for day, v in recent)) for d, a in sorted(adj.items()) if last < d <= cutoff]
 
 
 def update_live(data_dir: str | pathlib.Path, tickers: list[str], now_utc: dt.datetime | None = None, fetch=yahoo_history,

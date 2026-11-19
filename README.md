@@ -74,7 +74,7 @@ A scheduled Claude session reads new episodes twice a day and opens a pull reque
 `.github/workflows/episodes.yml` runs every four hours and appends newly published episodes to `data/episodes.csv`.
 
 - A day is published only when every US symbol and cryptocurrency held that day has its final price for it.
-- A stored price is never replaced, and a price for a day that is already published is never added. New levels are chained from stored ones with ratios of adjusted closes, so nothing the data vendor does later can move a published day. An adjustment the vendor books late, such as a dividend, is picked up by the next bar.
+- A stored price is never replaced, and a price for a day that is already published is never added. New levels are chained from the last few stored ones with ratios of adjusted closes, so nothing the data vendor does later can move a published day. An adjustment the vendor books a day late, such as a dividend, is picked up by the next bar.
 - Samsung and SK Hynix are held as dollar series built from the Seoul listings and the won-dollar rate. Over a Seoul holiday they are carried at their last close; the run prints a warning when a carried price is more than four days old.
 - A call that loses its whole stake (a short that more than doubles) is closed at nothing that day.
 - The paper book starts in cash on `paper_start`, buys the calls that are open at that close in equal parts, and sells each on its original exit day.
@@ -92,7 +92,7 @@ The job fails on purpose instead of publishing something doubtful. GitHub emails
 
 ```
 pip install -e ".[dev]"
-pytest -q                         # 50 tests
+pytest -q                         # 51 tests
 python -m allin.cli status        # the book as it stands: what is held, since when, until when
 python -m allin.cli run           # recompute and write ./results from stored prices
 python -m allin.cli run --fetch   # the same after appending the latest final prices

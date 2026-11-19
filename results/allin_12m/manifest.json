@@ -8,7 +8,7 @@
   "paper_start": "2026-11-19",
   "description": "Monitoring only until it earns a place. One 10,000 USD portfolio shared equally by every investment call made on the All-In podcast that is still inside its 12 months. A call is bought at the close of the first US session after the episode is published (New York date), or after the call was written into calls.csv if that was later, and sold at the close one calendar year later. Weights are reset to equal only when a call starts or ends. Total return, before costs.",
   "start_cash_usd": 10000.0,
-  "code_version": "dbd414ef5f",
+  "code_version": "5ec7e7744b",
   "ledger_version": "e8292468b1",
   "calls_in_ledger": 49,
   "source_repo": "all-in-tracker",

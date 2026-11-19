@@ -540,7 +540,39 @@ def test_an_adjustment_the_vendor_books_late_is_picked_up_by_the_next_bar(tmp_pa
     with pytest.raises(RuntimeError, match="disagrees"):                                     # a large disagreement is an error, not a dividend
         prices.update_live(tmp_path, ["AAA"], dt.datetime(2026, 11, 20, 23, 0, tzinfo=UTC), big)
     added = prices.update_live(tmp_path, ["AAA"], dt.datetime(2026, 11, 20, 23, 0, tzinfo=UTC), big, allow_jump={"AAA"})    # unless the owner sides with the vendor
-    assert added == [(D[4], "AAA", pytest.approx(100.0 * 99.0 / 79.2))]
+    assert added == [(D[4], "AAA", pytest.approx(124.375))]                                  # the middle of what the four stored bars imply: 100, 123.75, 125, 125
+
+
+def test_a_late_adjustment_is_caught_up_once_and_never_shows_again(tmp_path):
+    """Run the update day after day across a dividend the vendor booked one day late: one catch-up, then the true series, with no echo
+    when the under-stated bar later becomes the one the chain could have started from. One run a day and one run after many days agree."""
+    days = weekdays(dt.date(2026, 11, 2), 16)
+    true = [100.0 * 1.01 ** i for i in range(16)]                         # total return: +1% a day throughout
+    ex = 6                                                                # the ex-dividend day: the price itself falls 2% net (1% gain less a 3% dividend)
+    seen_early = [v if i < ex else v * 0.97 for i, v in enumerate(true)]  # what the vendor showed until the dividend was booked: prices, no adjustment
+
+    def vendor(upto, booked):
+        series = true if booked else seen_early                          # once booked, earlier days are scaled so that ratios are total returns
+        return lambda s, start: [(d, 0, series[i]) for i, d in enumerate(days) if i <= upto and d >= start]
+
+    def run(folder, upto, booked):
+        now = dt.datetime.combine(days[upto] + dt.timedelta(days=1), dt.time(1, 7), UTC)
+        return prices.update_live(folder, ["AAA", "SPY"], now, lambda s, start: vendor(upto, booked)(s, start) if s == "AAA" else [(d, 0, 1.0) for d in days[:upto + 1] if d >= start])
+
+    daily = tmp_path / "daily"; write_snapshot(daily, {"SPY": [(d, 1.0) for d in days[:6]], "AAA": [(d, v) for d, v in zip(days[:6], true)]})
+    run(daily, ex, booked=False)                                          # the ex-date bar is stored before the vendor books the dividend
+    assert prices.load_prices(daily).on("AAA", days[ex]) == pytest.approx(true[ex] * 0.97)
+    for upto in range(ex + 1, 16):
+        run(daily, upto, booked=True)
+    got = prices.load_prices(daily)
+    assert got.on("AAA", days[ex]) == pytest.approx(true[ex] * 0.97)      # the stored bar is never rewritten
+    for i in range(ex + 1, 16):
+        assert got.on("AAA", days[i]) == pytest.approx(true[i], rel=1e-6), days[i]      # caught up on the next bar and right ever after
+
+    late = tmp_path / "late"; write_snapshot(late, {"SPY": [(d, 1.0) for d in days[:6]], "AAA": [(d, v) for d, v in zip(days[:6], true)]})
+    run(late, ex, booked=False); run(late, 15, booked=True)               # the same history in two runs instead of ten
+    other = prices.load_prices(late)
+    assert all(other.on("AAA", d) == pytest.approx(got.on("AAA", d), rel=1e-6) for d in days)
 
 
 def test_a_first_time_ticker_keeps_only_final_unpublished_bars_and_an_optional_one_may_fail(tmp_path):
