@@ -1,0 +1,1308 @@
+# Reproducing the All-In podcast copy-trading research
+
+**Recovery date: 19 November 2026.** The repository README describes the objective as copying trades by All-In podcast hosts. This handoff recovers the **episode universe**. The initial repository commit contained one README. The available workspace and repository history yielded no original host-call ledger, market-price snapshot, strategy implementation, trade blotter or All-In performance table. The original trade count, P&L and Sharpe therefore remain unknown.
+
+## What another agent can reproduce today
+
+| Item | Evidence and result |
+|---|---|
+| Episode catalogue | 446 unique publisher GUIDs with UTC release time, title, publisher link and audio enclosure URL. Earliest release: 15 March 2020 at 02:04:09 UTC. Latest: 17 November 2026 at 21:43:00 UTC. The catalogue includes interviews and special episodes. |
+| Independent catalogue check | Apple's US lookup for show ID `1502871393` returned 200 episodes. All 200 matched the publisher feed on GUID and exact release timestamp. The remaining 246 records were checked for required fields and unique GUIDs. |
+| All-In trading experiment | No original signals, instrument mappings, price data, portfolio rules, executable backtest, or measured returns recovered. The 446 rows count episodes. A single episode may contain zero, one, or several actionable calls. |
+| Other Trading ideas code | Three public repository revisions were recovered and verified. They concern power execution, a Dutch power outlier strategy, and a Bitcoin Fear & Greed strategy. Their results are documented below under their own names. |
+
+The source was the show's [publisher feed](https://allinchamathjason.libsyn.com/rss), which redirected to the [Libsyn show feed](https://rss.libsyn.com/shows/254861/destinations/1928300.xml). Apple returned the same canonical feed URL for the show. [Show website](https://allin.com/) · [Apple lookup](https://itunes.apple.com/lookup?id=1502871393&entity=podcastEpisode&limit=200&country=US)
+
+## Restore the frozen inputs from this Markdown
+
+Clone this repository and run the following from its root. The catalogue is embedded at the end of the recovery section as a compressed CSV. This command works offline using Python's standard library. It verifies the exact CSV bytes before creating `allin_episodes_2026-11-19.csv` and refuses to overwrite an existing file.
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+import base64, csv, gzip, hashlib, io
+md = Path("reproduce_strategy.MD").read_text(encoding="utf-8").splitlines()
+i = md.index("<!-- allin-catalogue-v1-begin -->")
+j = md.index("<!-- allin-catalogue-v1-end -->")
+assert md[i + 1] == "```text" and md[j - 1] == "```"
+packed = base64.b64decode("".join(md[i + 2:j - 1]), validate=True)
+raw = gzip.decompress(packed)
+assert hashlib.sha256(raw).hexdigest() == "47fad0d946dc1c42721e784f384c9d1e4b769d5bb325aab2963ac938738fbd6a"
+rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8"), newline="")))
+assert len(rows) == len({r["guid"] for r in rows}) == 446
+with Path("allin_episodes_2026-11-19.csv").open("xb") as out:
+    out.write(raw)
+print(len(rows), rows[0]["published_utc"], rows[-1]["published_utc"])
+PY
+```
+
+Expected output: `446 2020-03-15T02:04:09Z 2026-11-17T21:43:00Z`. The CSV is 170,333 bytes in UTF-8. It preserves the publisher's URLs verbatim. A future redirect or corrected episode date can change a fresh download. For a historical replay, use this embedded copy.
+
+## Repeat the acquisition with a new dated snapshot
+
+The original RSS response contained 4,277,094 bytes. It was acquired on 19 November 2026 with SHA-256 `f1fad469399ed49affae16ac3d2a88eb720824c8d0aef6f7a7d33946b1514831`. The frozen catalogue contains metadata. The publisher retains the episode audio and show notes at the linked sources.
+
+Download to a new directory, keep the raw response, and run the extraction code below. Save it as `freeze_feed.py` in the new directory. Changes in the live feed should produce a new dated catalogue.
+
+```bash
+curl --fail --show-error --location 'https://allinchamathjason.libsyn.com/rss' --output publisher.xml
+python3 freeze_feed.py publisher.xml episodes.csv
+sha256sum publisher.xml episodes.csv
+```
+
+<!-- feed-extractor-start -->
+
+```python
+"""Export reproducible episode metadata from an All-In publisher RSS snapshot."""
+import csv
+import sys
+import xml.etree.ElementTree as ET
+from datetime import timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+
+def write_catalogue(source, destination):
+    items = ET.parse(source).getroot().findall("./channel/item")
+    rows = []
+    for item in items:
+        guid = item.findtext("guid")
+        title = item.findtext("title")
+        link = item.findtext("link")
+        enclosure = item.find("enclosure")
+        timestamp = parsedate_to_datetime(item.findtext("pubDate"))
+        if not (guid and title and link and enclosure is not None and timestamp.tzinfo):
+            raise ValueError("An episode is missing its identity, title, URL or timestamp")
+        published = timestamp.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows.append((published, guid, title, link, enclosure.attrib["url"]))
+    if not rows or len({row[1] for row in rows}) != len(rows):
+        raise ValueError("Empty catalogue or duplicate episode GUID")
+    with destination.open("x", encoding="utf-8", newline="") as output:
+        writer = csv.writer(output, lineterminator="\n")
+        writer.writerow(("published_utc", "guid", "title", "episode_url", "audio_url"))
+        writer.writerows(sorted(rows))
+
+if __name__ == "__main__":
+    write_catalogue(Path(sys.argv[1]), Path(sys.argv[2]))
+```
+<!-- feed-extractor-end -->
+
+## Recovering the trade ledger and testing the strategy
+
+The most valuable missing artifact is **one original signal row or trade blotter with an episode reference**. It would establish the selection criteria and help identify the historical dataset and analysis code. A transcript or episode catalogue supports reconstruction of what a host said. Historical fills, sizing and returns require additional evidence.
+
+1. **Identify the original inputs.** Look for an export of the original experiment containing episode/video IDs, host names, transcript timecodes, verbatim evidence, ticker mappings, signal dates and trades. Record the source, version, row count and SHA-256 before editing. Keep unaltered originals. The new repository at commit `a8edef4326061f65a19d1eb054bebda32f967cd0` contained only the project README.
+2. **Reconstruct calls only where necessary.** For each candidate statement, record the episode GUID, speaker, start/end time in the recording, host or guest status, instrument and direction. Keep explicit transactions, expressions of opinion and retrospective disclosures in distinct fields. Record ambiguous cases and exclusions. The producer's publication time is the earliest *evidenced podcast availability* in this catalogue. A timestamp within a prerecorded episode is an offset, and a host's own fill time may be much earlier.
+3. **Fix the replay assumptions before scoring.** Recover the original entry delay, holding period or exit rule, treatment of repeated or conflicting calls, position size, transaction costs, ticker changes, dividends, splits and benchmark. Where choices remain unknown, specify them in a new reconstruction. For example, a Friday release after an equity venue closes requires a defined next tradable session and a price available in that session. Crypto instruments may have a different calendar.
+4. **Trace every output.** Keep a row from statement → signal → order → fill → P&L, including missing prices, rejected candidates and open positions. Version the code, input hashes, selected episode universe, evaluation dates, environment, exact command and results together. Match original daily P&L and trades before declaring an exact reproduction. Numerical results from a reconstructed rule should have a new run ID.
+
+A compact ledger header for a recovered or newly coded run:
+
+```csv
+episode_guid,published_utc,host,quote_start_sec,quote_end_sec,source_url,statement_type,instrument_at_date,side,signal_available_utc,entry_utc,entry_price,exit_utc,exit_price,quantity,currency,costs,exit_reason,exclusion_reason
+```
+
+## Other code and data recovered during the project search
+
+These are separate experiments discovered before the destination README identified the podcast strategy. All three revisions were cloned, checked with `git fsck --full`, restored from independent Git bundles, and verified against per-file SHA-256 hashes for their 49 tracked files at the pinned revisions.
+
+| Project and immutable revision | What survived | Replay result |
+|---|---|---|
+| [Power quote versus cross](https://github.com/Jefersolitario/Trading_strategies/tree/a2bc9f86d984b110f358c0b956235856a8249d85) | Source, tests, simulator, requirements and input schema on the `quote-vs-cross-dashboard` branch. No historical decision or fill table located. | All 21 repository tests passed, including simulation and pipeline checks. A real-market execution P&L still requires the original decisions. |
+| [Power outlier backtest](https://github.com/Jefersolitario/intraday_mean_reversion_zscore/tree/d98a07f8535e883942c1f97eb90d3dfd8a6ccda9) | Python source and YAML. The script opens `data/NLXBID_2023_2024.parquet` and selects `Sym, Price, Qty, timestamp, DeliveryStartTs, DeliveryEndTs`. The configured threshold is 30 median absolute deviations and the VWAP exit window is five minutes. | The Dutch trade file was absent from reachable Git history. No release asset was found. Its native market replay is blocked. The code groups by the full symbol-hour to calculate each trade's median and MAD, which lets later trades in the hour influence earlier signals. |
+| [Bitcoin Fear & Greed](https://github.com/Jefersolitario/fear-greed-strategy/tree/4b6f61a138622fb1bfef0c135a154a03f237d85b) | Rules, engine, test suite, research scripts, results, 4,336 frozen daily input records and three later daily records. Some exploratory research scripts also reference external raw inputs. | All 15 repository tests passed. Using only the frozen input through 14 November 2026 reproduced all seven published backtest rows at the precision printed in the README. Including 15–17 November changes the evaluation window. |
+
+For the Bitcoin replay, the frozen `data/inputs_snapshot.csv` has SHA-256 `618b274c3f9f1dbcdccaedde29e18567acc365c5aad15c9f5bbcbf00ca0f8f04`. The separate `data/live_daily.csv` has SHA-256 `655b8f00d5882fd03616a36ef01e0b58112202e24c20d8468b4e5516da424fcb`. The repository's checked-in results index still points at the earlier strict-threshold strategy. Preserve that output as a historical artifact and write each replay to a fresh directory.
+
+The commands below run from a new checkout directory with Python 3.12.14. The documented replay used Polars 2.1.0, NumPy 2.3.5, SciPy 1.17.0, scikit-learn 1.8.0, fsspec 2026.9.0, requests 2.34.2 and pytest 9.2.0.
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install polars==2.1.0 numpy==2.3.5 scipy==1.17.0 scikit-learn==1.8.0 fsspec==2026.9.0 requests==2.34.2 pytest==9.2.0
+
+git clone https://github.com/Jefersolitario/Trading_strategies.git power
+git -C power switch --detach a2bc9f86d984b110f358c0b956235856a8249d85
+(cd power && OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 POLARS_MAX_THREADS=2 python -m pytest -q)
+
+git clone https://github.com/Jefersolitario/intraday_mean_reversion_zscore.git outliers
+git -C outliers switch --detach d98a07f8535e883942c1f97eb90d3dfd8a6ccda9
+
+git clone https://github.com/Jefersolitario/fear-greed-strategy.git bitcoin
+git -C bitcoin switch --detach 4b6f61a138622fb1bfef0c135a154a03f237d85b
+(cd bitcoin && python -m pytest -q)
+mkdir btc-snapshot-only
+cp bitcoin/data/inputs_snapshot.csv btc-snapshot-only/
+(cd bitcoin && PYTHONPATH=src python -m fng.cli run --data ../btc-snapshot-only --out ../btc-results-nov14)
+(cd bitcoin && PYTHONPATH=src python -m fng.cli run --out ../btc-results-nov17)
+```
+
+For the inclusive “buy at 10 or lower, sell at 80” rule, the frozen run produced 69 buys and $41,609.73 backtest P&L. With the three subsequent input rows included, the same rule produced 71 buys and $41,950.40. These numbers provide a check for the Bitcoin replay.
+
+## Frozen podcast catalogue
+
+<details>
+<summary>Machine-readable episode index · gzip-compressed UTF-8 CSV, encoded as base64</summary>
+
+<!-- allin-catalogue-v1-begin -->
+```text
+H4sIAAAAAAACA8S9e3PjRpIv+v/9FBifWc9uDNNGPfBSxA2H+umecbt7W7I9x/84qlAFCRZJ0AAptRwn7me/mVkFkJLdGHGOObsx
+a7sltfLHzKp8VT42O7tsh2vvftpt68XVrnWLbbtd+oXftEPn/E+7frkwO9d29F//j0xlCqkCkV2m8izVZ2n148IqWWhbGSiFKkAX
+TkOVKw2ZbPKiVLUpinzx2cv0LHn+7vs3L0BUyftu2W7b2iwXycu6W3ertk4+Ty66ujXL5INZtQ1+c9t26yFpvNnu+nZ9lbwwt61L
+XvWtd9b3V58trrfbzXD25Zd3d3dfmOWyXW86V5th+0XdfTl9022HL/Dr297U+PXVl713be/r7RerjfoSv9ogqS+WrR3u1/z9wde7
+3n/Jv6++Niuzvf7ZDN36y/NvvnnzLbxM05T+6lfOD1to3f8rKlmqNN2zprpMxZnIzzL146JIjUpLb6GQVQq6yQSUSpRQVN6nqSqa
+0ghkjThLvrtIPvhhg5/YJ9tuz6nPkzerjam3SbdOLram3+42wyL53q+RKT55bjbtFln2efKeBFknb01/47dDctdurz/NsN98uEMG
+eAG7AfoIBrYd1B3+HgQDLUOBbg1DhAK3AQnUAQlsGAesAg4gHOAIBzQjjhOKRsyIRoMQJJpMn6nsx4WqXdEoPKaF8hK0VQ4qUaJo
+8sKVpc5MJj2KRp6hXGzXbekEbq994vm83i+S3dr5HvmwdvStuus3XW+2PnHebhfJsPWbgSRpbjsUgsEvb5CnA55plNaqQ+EdyOjC
+1DfDU+UjUTgRESAiiIjgASCYAAEBAsZDwmQ8YGCPBwjNoaQGQnNCKckZKWUgUUrZmSjOJOqWOne2SescvM4sSkmXUBUWRWVlpVNR
+V0pKlJI6S96iturXyfNu6ZIfTJ9Yv73zfk0X6/Pk+XW7NosoO7wmiL+79T1KcdNt8QST2lmZYUhW7VXPiifpdnjnGpTMGm+QWdft
+UHf448hdT79hEzRY+2v46U+IFL/+L15ChVKhD4RyXDq4Mz3ED0SXs6aPA+OngfHTwPRhgD4MTB8G8MNA16Bg13gN44eB8bPAw8/y
++8fh33iJ1czxyEGmrF+zM4mX2OWVq5u8AV9lDWiP/2WVEqBMYWpba+O8xuOhz0aL0/463uPx0y/4W7XHM9F0/WqRPGudX/9lSPBf
+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
+O43/dIH+D87SNBJdmQIA
+```
+<!-- allin-catalogue-v1-end -->
+
+</details>
+
+---
+
+## Earlier Trading ideas handoff
+
+This appendix preserves the earlier project-wide Markdown as it was written before the GitHub recovery. Its inventory and missing-data statements describe that earlier search. Use the dated recovery results above for the current status.
+
+<details>
+<summary>Original handoff, including source register and proposed tests</summary>
+
+# Trading ideas — agent handoff and reproduction guide
+
+Prepared: 19 November 2026, Asia/Dubai. Market-data timestamps should be stored in UTC.
+
+## 1. Read this first
+
+The user requested a Markdown summary covering the work, data acquisition, reproduction of results, and everything tested, so another agent can continue independently.
+
+**Exact replication is currently blocked by missing original evidence.** This handoff has access to short summaries of earlier project discussions, but not their full transcripts, underlying datasets, source code, notebooks, configurations, trade logs, or result tables. The current project source list is empty, and no project files were found in the current workspace. Earlier workspace maintenance may have removed local artifacts. Additional conversation-context retrieval was unavailable.
+
+Consequently, this document contains three explicitly different things:
+
+1. A record of the objectives and observations visible in the supplied conversation summaries.
+2. Data-access documentation checked while preparing this handoff.
+3. A proposed reproduction protocol for a successor agent. This protocol is newly specified here; it is not a recovered implementation or evidence that these experiments ran.
+
+Do not fill unknown results with estimates. Do not describe a proposed strategy, provider claim, illustrative calculation, or research report as a completed backtest. No empirical strategy result was reproduced while preparing this file.
+
+### Evidence labels
+
+| Label | Meaning |
+|---|---|
+| USER-REPORTED | A result or observation appears in the available summary of a user message; underlying evidence has not been inspected. |
+| DISCUSSED | A topic, question, or candidate approach appears in the available history. Completion and performance are unknown. |
+| DOC-CHECKED | An official source was retrieved during preparation of this handoff. This does not mean an authenticated API call or dataset download succeeded. |
+| PROPOSED | New reproduction or evaluation instructions in this document; not historical test results. |
+| MISSING | Required information or an artifact is unavailable. |
+
+## 2. Project objectives and known scope
+
+The main research objective is to develop European short-term power trading strategies, with attention to net P&L, Sharpe ratio, drawdown, execution costs, and development effort. The available discussions cover GB, Germany, and the Netherlands. Separate discussions concern tokenized-equity arbitrage and geopolitical trading.
+
+Persistent research priorities visible in the history:
+
+- Evaluate executable net performance, including costs of entering and exiting.
+- Investigate forecast revisions, weather information, and their effect on fair value.
+- Treat forecast accuracy, market adoption, and trading profitability as separate questions.
+- Include Dexter and Open Climate Fix when investigating renewable forecasting providers.
+- Support market claims with evidence; the user explicitly requested deeper provider research and trader commentary.
+- For strategy comparisons, report P&L, Sharpe, drawdown, and development effort together.
+
+### Discussion inventory
+
+Dates identify the visible conversation summaries, not dataset coverage or experiment dates.
+
+| Discussion date | Topic | What is recoverable | What is not recoverable |
+|---|---|---|---|
+| 2026-09-06 | WeatherNext 3 and European intraday power | Four candidate directions: improve an existing power/fair-value forecast, propagate ensembles, trade weather events, and investigate update-speed advantages. User requested P&L, Sharpe, low drawdown, and benchmark verification. | Dataset, model implementation, benchmark selections, scores, rankings, or trading results. |
+| 2026-09-19 | Netherlands intraday drivers | Request for deep research and changes over the preceding three years; a report filename is recorded. | Report contents, citations, quantified findings, and any empirical tests. |
+| 2026-09-21 | Germany intraday drivers and strategies | Research revision, preservation of improvements while removing review pages, and a strategy-ranking document were requested. The report title refers to 2021–2026. | Final research claims, exact rankings, assumptions, scores, or simulations. |
+| 2026-09-30 | Metrics and an author's argument | User requested explanation and evaluation of an attached image. | Image, metrics, author's text, and conclusions. |
+| 2026-10-26 | Market-making example | User requested an example and follow-up discussion of risk; a LinkedIn short link was referenced. | Original example, quantities, source post, and the answer about risk. |
+| 2026-10-30 | Solar forecasts followed by the market | Netherlands research, then Germany; explicit request to include Dexter and Open Climate Fix and investigate trader commentary. | Evidence of adoption, provider ranking, country-specific coverage, historical forecasts, or comparative scores. |
+| 2026-11-02 | Event-based strategy execution | USER-REPORTED: the average event move looked profitable in a backtest, but crossing spreads on entry and exit produced losses. | Event definition, universe, period, signals, fills, capital, and performance values. |
+| 2026-11-03 | GB power pairs trading | USER-REPORTED: crossing spreads on entry and exit consumed approximately half the strategy's value. Questions concerned a five-standard-deviation trigger on product A, alternative exits, and divergence stops. | Exact products, meaning of “half its value,” position sizing, hedge ratio, dates, code, and result tables. |
+| 2026-11-06 | Tokenized stocks versus stocks | Request to investigate arbitrage and supply evidence. | Issuer, token, exchange, underlying, redemption mechanism, data, or tested trade. |
+| 2026-11-09 | Geopolitics and Market Wizards | Question about trading wars and tariffs, and whether war can be predicted. The summary references a Rogers discussion on page 116 about knowing information beforehand. | Attached PDF contents, verified pagination, exact passage, strategy, or test. |
+
+The available GB discussion also contains this methodological direction: model the spread at a feasible exit time using delivery periods, renewable and demand ramps, and time remaining. Different delivery periods should not be assumed to end at the same price. Treat this as a modelling requirement; no estimated model or convergence test is available.
+
+## 3. Results and test-evidence ledger
+
+This is the complete inventory of test evidence visible to this handoff, **not a claim that every historical experiment has been recovered**.
+
+| ID | Item | Status | Recoverable outcome | Reproduction status |
+|---|---|---|---|---|
+| R01 | Average event-move backtest | USER-REPORTED | Appeared profitable before realistic spread crossing. | Blocked: event definition, sample, prices, and code missing. |
+| R02 | Event strategy with entry/exit spread crossing | USER-REPORTED | Execution made the strategy lose money. | Blocked: quote/fill records and full cost assumptions missing. |
+| R03 | GB pairs strategy with entry/exit spread crossing | USER-REPORTED | Approximately half the strategy's “value” was lost to spread crossing. | Blocked: denominator and monetary results unknown. This is not evidence of a 50% capital drawdown. |
+| R04 | Five-sigma trigger on product A | DISCUSSED | User proposed or asked about it. | No evidence it was implemented or tested. |
+| R05 | Exit when convergence slows or stops | DISCUSSED | Candidate exit concept. | No evidence of a threshold, implementation, or test. |
+| R06 | Minimum-profit or statistical exits | DISCUSSED | Candidate exit concepts. | No measured outcomes available. |
+| R07 | Divergence stop-loss | DISCUSSED | User asked how to set it. | No chosen rule or test available. |
+| R08 | Provider forecast plus WeatherNext | DISCUSSED | Candidate forecast enhancement. | No forecast-error or trading result available. |
+| R09 | Weather ensemble → power ensemble → fair-value ensemble | DISCUSSED | Calibration and CRPS were explicitly raised. | No model, calibration output, or P&L available. |
+| R10 | Weather-event trading | DISCUSSED | Precipitation, snow, and storms were examples. | No event sample or tested performance available. |
+| R11 | Forecast update-speed edge | DISCUSSED | User hypothesized an advantage from frequent updates. | No first-receipt or reaction-latency measurements available. |
+| R12 | Germany strategy ranking | DISCUSSED; prior artifact referenced | User requested comparison on P&L, Sharpe, drawdown, and effort. | Ranking document unavailable; no values reconstructed. |
+| R13 | Provider adoption in NL/DE | DISCUSSED | Research requested, including practitioner commentary. | No market-share or adoption conclusion established here. |
+| R14 | Market making, tokenized equities, and geopolitics | DISCUSSED | Questions and research requests. | No recoverable empirical results. |
+
+There are no recoverable exact P&L totals, Sharpe ratios, drawdowns, confidence intervals, sample sizes, best parameters, rejected-model scores, or live/paper-trading results. Their absence here does not prove the original conversations never contained them.
+
+## 4. Recover the original evidence before claiming replication
+
+The following artifacts are named in the available history but were not attached or inspected in this handoff:
+
+| Artifact | Role |
+|---|---|
+| `Germany_Intraday_Power_Improved_Report.pdf` | Final improved Germany report referenced after the user asked to remove review pages. |
+| `Germany_Intraday_Power_Revised_Research_and_Claim_Audit.pdf` | Earlier Germany version; do not assume it is the final report. |
+| `German_Intraday_Power_Trading_Strategy_Ranking.docx` | Strategy comparison requested after the Germany research. |
+| `Netherlands_Power_Intraday_Research.md` | Netherlands driver research. |
+| `41775536-Market-Wizards.pdf` | Source for the geopolitical-trading discussion. |
+| September 30 image and October 26 source post | Required to reproduce those explanations. |
+
+Also recover the relevant full conversation, repository/notebooks, immutable raw data or provider queries, environment lockfile, model/configuration files, trade/fill logs, and all experiment outputs—including failures.
+
+Current access is limited to attachments, files supplied in this workspace, and explicitly selected sources. A filename mentioned in history is not sufficient authorization or routing to retrieve a file from another conversation. Request an attachment or explicit source selection when needed. Do not search unrelated user files for replacements.
+
+For R01–R03, resolve these unknowns first:
+
+- Exact event definition or instrument pair, venue, product duration, currency, and sample dates.
+- What the original “average move,” “profit,” and “half its value” calculations measured.
+- Signal timestamps, publication/receipt timestamps, holding periods, and market-session constraints.
+- Entry/exit order types, quantities, latency, partial-fill policy, fees, and impact assumptions.
+- Model training windows, normalization, hedge ratios, refit frequency, random seeds, and data revisions.
+- Original commands, code commit, baseline output, and numerical comparison tolerances.
+
+## 5. How to obtain the data
+
+The following routes were DOC-CHECKED on 19 November 2026. They establish starting points for acquisition; no original trading dataset was downloaded, no paid subscription was purchased, and no authenticated provider access was tested.
+
+### 5.1 Exchange prices, trades, and order books
+
+The [official EEX Group/EPEX data shop](https://webshop.eex-group.com/epex-spot-public-market-data) lists historical continuous trades, indices, and anonymous order histories, with GB, DE, and NL among the markets. Historical orders are a contract-required product; the catalogue describes SFTP products. Use an existing entitlement or obtain the appropriate product and year coverage. [S1]
+
+Acquisition procedure:
+
+1. Confirm the original venue. EPEX is a relevant route, not a recovered fact about the user's implementation.
+2. Obtain the instrument/reference catalogue, historical trade feed, and historical order events or suitably granular quotes for the original dates.
+3. Retain the provider's current file specification, timezone rules, sequence semantics, correction/cancellation rules, and product-duration definitions.
+4. Confirm whether the history permits reconstruction of the book and queue priority needed by the execution model. Do not assume “order history” alone guarantees exact queue reconstruction.
+5. Save original files unchanged with checksums, retrieval timestamps, entitlement/product names, and coverage manifests.
+
+Data sufficiency depends on the claim. Executable taker estimates need contemporaneous quotes, available volume, and latency assumptions. Passive-fill studies need stronger order-flow evidence or explicitly conservative fill assumptions. An aggregate price index or trade VWAP does not establish which quote an order could execute against.
+
+### 5.2 GB fundamentals: Elexon Insights
+
+The [Elexon developer portal](https://developer.data.elexon.co.uk/) documents public APIs without API keys. Its dataset endpoints support publication-time queries for superseded forecasts. Relevant documented examples include `datasets/NDF`, `datasets/WINDFOR`, `datasets/FUELHH`, `datasets/INDO`, `datasets/IMBALNGC`, and `datasets/MID`. Select endpoints according to their actual definitions, rather than assuming all “demand” or “generation” measures are interchangeable. [S2]
+
+Use the portal's current OpenAPI definition to construct requests and determine time-range limits. Download raw publication-time records in bounded windows; verify coverage and revisions before normalization. Elexon's [platform documentation](https://github.com/elexon-data/insights-docs/blob/main/docs/insights_data_platform.md) also describes a historical message archive and the authenticated IRIS live stream. [S3]
+
+Preserve forecast publication time and delivery period separately. Historical “latest” views require special scrutiny: a forecast revised after a simulated decision must not enter that decision. Settlement/outturn data should be labels or available-time features, according to when each version was actually published. Market Index Data is not a replacement for an executable order book.
+
+### 5.3 Germany/Netherlands fundamentals: ENTSO-E
+
+The [official token guide](https://transparencyplatform.zendesk.com/hc/en-us/articles/12845911031188-How-to-get-security-token) describes registration, an API-access request, and token generation. The documented production endpoint is `https://web-api.tp.entsoe.eu/api`. Use the [REST integration guide](https://transparencyplatform.zendesk.com/hc/en-us/sections/12783116987028-Restful-API-integration-guide) for dataset parameters, EIC areas, periods, and response handling. [S4–S6]
+
+For each required series—load, renewable forecasts, actual generation, outages, flows, or capacity—record the exact documented request and confirm the relevant country/bidding-zone boundary and period of validity. Save raw responses, including revision/publication fields when supplied. Follow the API's current request limits and response semantics.
+
+Do not assume a historical API response preserves every forecast vintage. Establish this per dataset. Where original vintages cannot be recovered, mark point-in-time replication blocked or use an explicitly labelled sensitivity analysis; do not silently substitute final revised values. Supplement with the relevant TSO source when necessary, documenting that source separately.
+
+### 5.4 WeatherNext 3
+
+The [official access guide](https://developers.google.com/weathernext/guides/access-forecast) provides a data-request process and access through Google Cloud Storage, Earth Engine, and BigQuery. Choose the surface matching the experiment. [S7]
+
+The [GCS guide](https://developers.google.com/weathernext/guides/gcs) distinguishes full ensemble output from precomputed statistics. It documents the full-ensemble root `gs://weathernext3_spatial/weathernext_3_0_0/zarr/` and statistics root `gs://weathernext3_statistics_spatial/weathernext_3_0_0_statistics/zarr/`. The full ensemble has requester-pays billing; inspect terms and retrieval costs before a bulk download. [S8]
+
+Acquisition procedure:
+
+1. Obtain access for the intended account/service identity using the official process.
+2. Recover the original sample dates and model version; distinguish forecasts produced operationally from retrospective runs or backfills.
+3. Use the official starter notebook for the chosen surface. Record the exact object/table, run identifiers, queried variables, coordinates, and downloaded versions.
+4. Select the relevant region/assets and horizons before materializing large arrays.
+5. Preserve initialization, valid, provider-publication, and actual receipt times separately.
+6. Retain ensemble-member identity for scenarios. Marginal percentiles alone do not reconstruct joint weather scenarios across locations, variables, and delivery periods.
+
+**Availability correction for the update-speed hypothesis:** hourly initialization is not hourly access to zero-latency information. The [official dissemination schedule](https://developers.google.com/weathernext/guides/dissemination) lists delivery targets after initialization and differences between access surfaces. For example, its 00:00 UTC main cycle targets 07:45 UTC on GCS and 08:10 UTC on BigQuery/Earth Engine, with variable delays. These are current documentation values, not measured historical arrival times. Test the hypothesis using actual availability and the competing provider's availability. [S9]
+
+Do not interpolate a missing historical operational run and count it as information that existed at the time. More frequent model initialization, forecast skill, and incremental tradable information require separate tests.
+
+### 5.5 Dexter and Open Climate Fix
+
+Dexter publishes [Power Forecast API documentation](https://docs.dexterenergyservices.com/dexter-api/power-forecast). Arrange access to the relevant product, asset/cluster universe, and historical runs. Its [forecast filtering guide](https://docs.dexterenergyservices.com/dexter-api/power-forecast/onboarding-tutorial/retrieve-a-power-forecast/get-the-forecast/filter-the-forecast-based-on-usage) describes timestamp filters and explains that `/latest` returns the newest available forecast. A current `/latest` response is not a historical-vintage archive. [S10–S11]
+
+Open Climate Fix's [October 2026 announcement](https://www.openclimatefix.org/insights/welcome-ocf-solar) says Quartz Solar became OCF Solar and links to the [OCF Energy API documentation](https://api.ocf.energy/v1/docs). Confirm current credentials, country coverage, aggregation, history, and publication fields with the provider. The linked API page was located, but its schema was not extracted in this handoff. [S12]
+
+For each provider request a data dictionary, historical forecast vintages, model/version changes, update and publication timestamps, and the precise capacity/asset universe. Do not assume asset-level forecasts can be compared directly with national totals. API availability or a client testimonial does not establish which forecast “the market follows.”
+
+### 5.6 Weather benchmark and adoption evidence
+
+The available history references [Operational WeatherBench's European skill-versus-lead page](https://owb.brightband.com/skill-vs-lead?region=europe). The original saved URL includes a start date of `2026-08-04` but its end-date parameter is truncated in the available summary. Do not invent the missing end date. The page returned a loading shell during this handoff; no numerical results were extracted. [S13]
+
+To reproduce a benchmark, retain the full query/export and record model version, initialization dates, geographical mask, variable, level, lead, verifying observations, metric, aggregation, missing-data policy, and paired sample size. Use a common sample for model comparisons. Do not translate a general weather benchmark directly into a power-trading P&L claim.
+
+For adoption research, preserve dated source URLs and exact country/product scope. Keep provider statements, independently verified customers, and trader comments in separate evidence fields. The original forum/Reddit/X investigation is not recoverable here and was not repeated in this handoff.
+
+## 6. Proposed data contract
+
+These schemas are implementation requirements for future work, not descriptions of files already present.
+
+| Dataset | Minimum fields |
+|---|---|
+| Instruments | venue, market/zone, contract ID, currency, delivery start/end UTC, duration hours, quantity unit, tick/lot size, applicable trading cutoff and rule version |
+| Quote/order events | contract ID, exchange timestamp, receipt timestamp if available, sequence/order IDs where provided, event type, side, price, size, snapshot/delta flag, correction state |
+| Trades | trade ID, contract ID, timestamp, price, quantity/unit, aggressor if supplied, cancellation/correction state |
+| Forecast vintages | provider, product/model version, run ID, initialization time, publication time, receipt time, delivery/valid interval, geography/asset, variable, value, unit, member/quantile |
+| Fundamentals/outturn | series ID, geography, delivery interval, value/unit, publication time, revision, availability status |
+| Events | event ID/type, original source, first observable timestamp, receipt timestamp, affected contracts, announcement versus effective time |
+| Decisions and fills | strategy/run ID, decision timestamp, inputs/version references, signal, order actions, submission/ack/fill times, actual or simulated fills, fees, exit reason |
+
+Use a point-in-time join: each decision may use only records whose established availability time is no later than that decision. For live replay, availability includes receipt and processing delay. When receipt time is missing, document a proxy and test delay assumptions; do not present the proxy as observed latency.
+
+Normalize units explicitly: power MW, energy MWh, price currency/MWh, and fees according to their actual charging units. Preserve negative prices. Map local delivery calendars using timezone-aware identifiers and distinguish duplicated/missing daylight-saving periods. Do not mix hour, half-hour, and quarter-hour contracts by matching labels alone.
+
+Store unmodified raw data separately from normalized and derived data. Every transformation needs a code version and input hashes. Record missing-data exclusions and the size of the excluded sample.
+
+## 7. Proposed reproduction protocol: execution and GB pairs
+
+### 7.1 Reproduce the original baseline first
+
+1. Recover R01–R03 definitions and the original code/configuration. Run them unchanged in a pinned environment.
+2. Reconcile trade/event counts, timestamps, positions, and gross P&L against the original output before evaluating improvements.
+3. Reconcile cost components independently: spread crossing, fees, impact, latency, incomplete fills, hedge execution, and any delivery/settlement exposure.
+4. Hold signal and sample fixed while comparing execution assumptions. Separately report changes in sample caused by unfilled orders.
+5. Save every run, including negative results. If the original code cannot be recovered, label the replacement a reconstruction, not an exact replication.
+
+### 7.2 P&L accounting specification
+
+For a fully closed pair that is long A and short B, let positive energy quantities be `qA` and `qB` in MWh. For example, `qA = MW_A × duration_A_hours`.
+
+Using realized execution prices:
+
+```text
+PnL = qA × (sell_A_exit − buy_A_entry)
+    + qB × (sell_B_entry − buy_B_exit)
+    − explicit_fees
+```
+
+For a taker model with sufficient quoted volume, the corresponding quote-side prices are:
+
+```text
+PnL_taker = qA × (bid_A_exit − ask_A_entry)
+          + qB × (bid_B_entry − ask_B_exit)
+          − explicit_fees
+```
+
+These are accounting definitions, not verified fill assumptions. Use depth-weighted or actual fill prices for larger quantities and apply latency before selecting an executable book. Simulate each leg; do not assume simultaneous fills unless justified.
+
+Against synchronized midpoints, the spread-only round-trip cost is:
+
+```text
+spread_cost = qA × (spread_A_entry + spread_A_exit) / 2
+            + qB × (spread_B_entry + spread_B_exit) / 2
+```
+
+Do not subtract spread cost again when execution prices already include it. Impact and slippage should likewise not be counted twice. Include residual inventory and imbalance/delivery costs when positions are not fully closed.
+
+### 7.3 Signals to evaluate
+
+The following are PROPOSED experiments; no optimal setting is established.
+
+- Preserve the original signal as the baseline.
+- Define a pair residual such as `r_t = mid_A_t − beta_t × mid_B_t`, estimating `beta_t` and any conditional mean using only past training data.
+- Define a normalized residual `z_t = (r_t − conditional_mean_t) / conditional_scale_t`; condition on delivery shape, time to delivery, and relevant forecast ramps where justified.
+- Compare the user's proposed five-sigma move in A with a pair-residual trigger. A large move in A alone does not identify whether the pair is mispriced.
+- Estimate the expected **executable** pair P&L at a feasible exit horizon, including costs and partial-fill risk. Predefine the threshold needed to trade and how estimation uncertainty enters it.
+
+If a positive price hedge ratio `beta` is translated into positions, specify it in energy terms: `qB = beta × qA`, then convert each leg into its MW quantity using its own duration. This simple convention does not cover negative-beta or more complex hedges; those need an explicit signed-position definition.
+
+### 7.4 Execution, exit, and stop experiment matrix
+
+All rows below are **NOT RUN in this handoff**. They are a finite starting matrix, not evidence of prior testing or a claim that all variants will improve results.
+
+| Test ID | Comparison | Keep fixed | Required measurements |
+|---|---|---|---|
+| P01 | Original signal at midpoints versus taker quotes | Events, decisions, sizes, sample | Gross/net P&L bridge and spread-cost attribution |
+| P02 | Original trigger versus five-sigma A trigger versus residual trigger | Split, fees, executable-price model | Signal count, net expectancy, tail losses |
+| P03 | Original threshold versus expected-net-P&L threshold | Feature availability and training procedure | Net P&L, turnover, missed trades, calibration |
+| P04 | Taker versus passive versus mixed-leg execution | Alpha model and eligible decisions | Fill rate, queue assumptions, adverse selection, leg risk |
+| P05 | Original exit versus fixed horizon versus residual/fair-value exit | Entry policy | Net P&L, holding time, remaining exposure |
+| P06 | Convergence-slowdown exit | Entry and maximum holding time | Explicit slowdown estimator/window, false exits, net P&L |
+| P07 | Minimum realizable-profit exit | Entry and risk limits | Fill-adjusted profit distribution and missed exits |
+| P08 | Monetary versus volatility-scaled divergence stop | Entry and exposure budget | Gap/latency losses, drawdown, stop frequency |
+| P09 | Time-to-delivery exit and mandatory close | Market cutoff and order policy | Liquidity, failed closes, settlement exposure |
+| P10 | Delay, spread, depth, and fee stress | Chosen strategy parameters | Break-even costs, robustness, capacity |
+
+For passive orders, touching a limit is not proof of a fill. Specify queue position, cancellations, partial fills, stale-order cancellation, and what happens when only one leg executes. Report results under credible alternative fill assumptions when queue data is incomplete.
+
+Exits and stops must be causal: “when convergence stops” needs a rule based only on information observed so far. A target profit is not guaranteed to be reached, and a stop trigger is not a guaranteed execution price.
+
+## 8. Proposed reproduction protocol: weather and fair value
+
+Begin with the original provider/model baseline once recovered. Use identical chronological evaluation samples for every comparison.
+
+| Test ID | Experiment | Purpose | Status |
+|---|---|---|---|
+| W01 | Provider-only power and price forecast | Establish original baseline | NOT RUN |
+| W02 | Provider plus WeatherNext features/residual correction | Test incremental information | NOT RUN |
+| W03 | WeatherNext-only conversion baseline | Attribute gains and identify redundancy | NOT RUN |
+| W04 | Weather ensemble → power scenarios → conditional price scenarios | Evaluate probabilistic forecasts | NOT RUN |
+| W05 | Weather-event subsets: precipitation, snow, storms, ramps | Test predeclared event hypotheses | NOT RUN |
+| W06 | First-available forecasts versus delayed availability | Test whether an edge survives realistic timing | NOT RUN |
+| W07 | Forecast improvement versus trading improvement | Separate prediction skill from monetization | NOT RUN |
+
+Proposed pipeline:
+
+1. Map weather to the actual generation/demand universe using capacity, location, technology, and relevant asset metadata.
+2. Fit weather-to-power models on past data only; control for capacity changes, outages, curtailment, and label quality.
+3. For probabilistic work, propagate coherent member scenarios through nonlinear power and price models. Preserve spatial and temporal dependence; include additional model uncertainty where justified.
+4. Train fair value on the chosen tradable target and feasible exit horizon, with available-time fundamentals and market-state features.
+5. Calibrate distributions on a separate past validation set. Evaluate deterministic errors, CRPS where applicable, interval coverage, calibration by lead/regime, and price/trading outcomes.
+6. Replay executable decisions with the same costs, latency, and risk accounting used for the baseline.
+7. Quantify incremental performance after all costs. Improved weather or power error alone does not establish a profitable strategy.
+
+Retain realized arrival times and missing runs. Evaluate extreme-weather subsets with predeclared definitions and sample counts; do not choose event windows after observing their profits.
+
+## 9. Other workstreams and their reproduction requirements
+
+### Germany and Netherlands market-driver research
+
+Recover the final reports before reconstructing their findings. Build a claim ledger containing the exact claim, period, country/product, original source, measured evidence, and disposition. Recheck time-sensitive market rules using the rule version effective during each backtest, not only today's rules. A three-year/five-year report scope is not an established data window for every strategy.
+
+Reproduce any strategy rankings from their underlying calculations. Distinguish measured performance from qualitative potential and estimated development effort. No original ranking can be inferred from the filenames.
+
+### Market making
+
+Recover the source example and inventory/quote policy. Required data includes order events, trades, fees, fills, inventory, markouts, and hedging rules. Evaluate adverse selection, inventory exposure, and cancellation latency. No risk conclusion or performance from the original example is recoverable here.
+
+### Tokenized stocks versus stocks
+
+First identify the exact token, issuer, chain, venue, underlying share, and legal/economic claim. Then obtain synchronized executable quotes, trading hours, conversion/redemption rights, fees, borrow availability/cost, dividends/corporate actions, FX, and settlement timing. Whether a price difference can be locked in depends on those specific facts. No issuer terms or executable arbitrage were verified in this handoff.
+
+### Geopolitical trading
+
+Recover the cited PDF and verify the passage and page numbering before quoting or attributing a rule. A future test would need timestamped information available before decisions, a predeclared event rule, the surprise relative to prior expectations, executable prices, and a full sample including non-events/failed predictions. A post-event explanation is not a contemporaneous forecast. No war/tariff prediction model or backtest is available here.
+
+## 10. Evaluation and reproducibility requirements
+
+These are PROPOSED requirements for new or recovered empirical work:
+
+- Use chronological train/validation/test periods. Avoid leakage from overlapping delivery/event labels across split boundaries. Choose and record any purge/embargo based on the actual information horizon.
+- Fit normalization, hedge ratios, feature selection, and thresholds on training/validation data only. Preserve an untouched test interval.
+- Record every tried configuration, including unsuccessful runs. Do not select a threshold on the final test set.
+- Use paired comparisons on common samples. If a strategy changes trade selection, also report coverage and selection effects.
+- Report net P&L, P&L per MWh, turnover, fill rate, cost breakdown, exposure/capital assumptions, maximum drawdown, tail losses, and uncertainty around performance differences.
+- Define Sharpe precisely: returns or P&L series, capital normalization, sampling frequency, zero-trade days, risk-free treatment, and annualization. Do not apply a square-root trade-count factor to dependent trades without justification.
+- For weather/power predictions, report metrics by lead, delivery period, country, season, and event regime where sample sizes support them.
+- Separate date-effective market rules and model/provider versions. Store software dependencies and raw-data hashes alongside outputs.
+
+### Suggested run manifest
+
+This YAML is a template. Nulls intentionally represent missing original values; it is not an executable experiment configuration.
+
+```yaml
+project: Trading ideas
+run_id: null
+evidence_status: proposed
+experiment_id: null
+original_run_reference: null
+code_commit: null
+environment_lock_sha256: null
+raw_data_manifest_sha256: null
+normalized_data_sha256: null
+market_and_venue: null
+contract_ids: []
+date_range_utc: {start: null, end: null}
+splits: {train: null, validation: null, test: null}
+target_and_horizon: null
+signal_definition: null
+forecast_vintage_policy: null
+availability_and_latency_policy: null
+hedge_and_sizing_policy: null
+execution_and_partial_fill_policy: null
+entry_exit_and_stop_parameters: null
+fees_and_cost_units: null
+delivery_or_settlement_policy: null
+random_seed: null
+metrics_definition: null
+reproduction_tolerances: null
+command: null
+exit_code: null
+stdout_log: null
+stderr_log: null
+outputs: []
+known_limitations: []
+```
+
+Suggested future artifact layout:
+
+| Path | Contents |
+|---|---|
+| `data/raw/` | Immutable original provider responses/files |
+| `data/manifests/` | Queries, coverage, versions, units, and hashes |
+| `data/normalized/` | Reproducible, timestamp-aware tables |
+| `src/` | Acquisition, normalization, model, and replay implementation |
+| `configs/` | Explicit per-experiment parameters |
+| `runs/<run_id>/` | Manifest, logs, decisions, orders, fills, metrics, and plots |
+| `reports/` | Evidence ledger, experiment matrix, findings, and limitations |
+
+No commands invoking these paths are supplied because no implementation has been recovered or created. A successor must add the real entry points and exact successful commands when they exist.
+
+## 11. What was checked while preparing this file
+
+| Check | Outcome | What it establishes |
+|---|---|---|
+| Current source-file metadata and workspace inventory | No project source files available | Original artifacts cannot be replayed from this workspace. |
+| Additional conversation-context retrieval | Unavailable | No missing historical experiment details were recovered. |
+| EPEX/EEX official data catalogue | Retrieved | Official market-data acquisition starting point; no entitlement/download tested. |
+| Elexon official portal and platform documentation | Retrieved | Public API route and publication-history guidance; no historical data fetched. |
+| ENTSO-E official token/endpoint/integration documentation | Retrieved | Documented acquisition route; no authenticated request executed. |
+| WeatherNext official access/GCS/dissemination documentation | Retrieved | Documented surfaces and availability distinctions; no forecast downloaded. |
+| Dexter official API and filtering documentation | Retrieved | Documented forecast retrieval concepts; no customer access tested. |
+| OCF product/API migration announcement | Retrieved | Current API entry point located; API schema and authentication not tested. |
+| Operational WeatherBench page | Loading shell only | No scores or model comparison verified. |
+| Original strategy, forecast, or execution backtests | Not run | No newly reproduced empirical performance. |
+
+The handoff's document checks are separate from trading tests. Passing a Markdown consistency check does not validate a strategy or establish data availability.
+
+## 12. Instructions for the next agent
+
+1. Read sections 1 and 3 before making any claim about completed tests.
+2. Identify the experiment the user intended to hand off. This document covers the visible project summaries because no specific active experiment was recoverable.
+3. Obtain the missing original transcript/artifacts through an attachment or explicitly selected source. Prioritize the raw data, code/configuration, and original output for R01–R03 if execution is the intended scope.
+4. Establish exact dates, products, quantities, timestamps, and costs. Do not quietly choose replacements for unknown originals.
+5. Reproduce the original baseline and reconcile its outputs. If this is impossible, state exactly why and label any new implementation as a reconstruction.
+6. Use section 5 to acquire the required data, preserve point-in-time provenance, and run only the applicable experiments.
+7. Replace missing fields with evidence, record all successful and failed commands, and append measured outputs to the results ledger.
+8. Deliver a reproducibility package with raw-data manifests, a pinned environment, actual commands, deterministic output checks where feasible, and a complete experiment table.
+
+Suggested opening instruction for a successor:
+
+> Continue the Trading ideas project using this handoff. Treat user-reported outcomes as unverified until reconciled with original data and code. Recover the intended experiment and reproduce its baseline before proposing improvements. Preserve publication/receipt times, executable costs, and unsuccessful experiments. Distinguish exact replication, reconstruction, new tests, and documentation-only checks in every result.
+
+### Completion criteria for an eventual exact replication
+
+- Original input versions, configuration, environment, and code are identified.
+- Acquisition/normalization succeeds with a documented coverage report.
+- Decision and fill records reconcile with the original run, or discrepancies are explained.
+- P&L and other outputs match within predefined, justified tolerances.
+- All tested variants and failures have manifests and logs.
+- Another agent can execute the recorded commands without guessing parameters.
+
+None of these empirical completion criteria is claimed as satisfied by this handoff alone.
+
+## 13. Source register
+
+All web sources below were checked on 19 November 2026. They support the data-access notes, not the historical user-reported strategy outcomes. Preserve dated snapshots when implementing a reproducible pipeline because live documentation can change.
+
+| ID | Source | Use / limitation |
+|---|---|---|
+| S1 | [EEX Group — EPEX SPOT public market data](https://webshop.eex-group.com/epex-spot-public-market-data) | Data-product catalogue; no purchase or entitlement verification. |
+| S2 | [Elexon Insights developer portal](https://developer.data.elexon.co.uk/) | Authentication, dataset patterns, publication-time queries, endpoint catalogue. |
+| S3 | [Elexon — Insights Data Platform](https://github.com/elexon-data/insights-docs/blob/main/docs/insights_data_platform.md) | API, historical archive, and IRIS channel descriptions. |
+| S4 | [ENTSO-E — How to get security token](https://transparencyplatform.zendesk.com/hc/en-us/articles/12845911031188-How-to-get-security-token) | Official access process. |
+| S5 | [ENTSO-E — RESTful API integration guide](https://transparencyplatform.zendesk.com/hc/en-us/sections/12783116987028-Restful-API-integration-guide) | Parameter, area, and response documentation entry point. |
+| S6 | [ENTSO-E — Request Endpoint](https://transparencyplatform.zendesk.com/hc/en-us/articles/15696677194644-Request-Endpoint) | Official production base URL. |
+| S7 | [Google — Accessing WeatherNext forecasts](https://developers.google.com/weathernext/guides/access-forecast) | Access request and available surfaces. |
+| S8 | [Google — WeatherNext on GCS/Zarr](https://developers.google.com/weathernext/guides/gcs) | Full ensemble/statistics distinction and archive access. |
+| S9 | [Google — WeatherNext dissemination schedule](https://developers.google.com/weathernext/guides/dissemination) | Target delivery timing; not measured historical receipt times. |
+| S10 | [Dexter — Power Forecast documentation](https://docs.dexterenergyservices.com/dexter-api/power-forecast) | Product integration documentation. |
+| S11 | [Dexter — Filter the Forecast based on Usage](https://docs.dexterenergyservices.com/dexter-api/power-forecast/onboarding-tutorial/retrieve-a-power-forecast/get-the-forecast/filter-the-forecast-based-on-usage) | Latest-forecast and timestamp-filter semantics. |
+| S12 | [Open Climate Fix — Welcome OCF Solar](https://www.openclimatefix.org/insights/welcome-ocf-solar) | Product rename and link to current API docs; country/history coverage unverified. |
+| S13 | [Operational WeatherBench — European skill versus lead](https://owb.brightband.com/skill-vs-lead?region=europe) | User-referenced benchmark entry point; numerical content not extracted. |
+
+The historical discussion summaries supplied to this session are the sole source for sections 2–4. This handoff does not claim to have re-read their original reports, images, PDF, or complete conversations.
+
+</details>
