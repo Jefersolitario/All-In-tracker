@@ -17,5 +17,5 @@ for e in rows:
     print(e.ticker, e.venue, e.symbol, e.entry_utc, e.entry_price, e.close_utc, e.close_price, None if e.ratio is None else round(e.ratio, 5))
 f = 1 + sum(0.5 * (e.ratio - 1) for e in rows)
 print("factor for call 49:", round(f, 5), "| on file: 1.0553")
-assert abs(f - 1.0553) < 3e-4 and len(got) > 0 and len(btc) == 24
+assert abs(f - 1.0553) < 3e-4 and len(got) > 0 and len(btc) in (24, 25)      # Binance counts the candle that opens at the end time
 print("SMOKE OK")
