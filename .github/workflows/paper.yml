@@ -73,7 +73,7 @@ jobs:
           # manifests carry fingerprints of the code, strategies.toml and calls.csv, so they change only with those
           restated=no
           if [ "$ALLOW_RESTATE" = "yes" ] && ! git diff --cached --quiet -- results; then restated=yes; fi    # a restatement adds no day and no price
-          if [ "$restated" = "no" ] && [ "$before" = "$after" ] && git diff --cached --quiet -- data/prices_live.csv ':(glob)results/*/manifest.json'; then
+          if [ "$restated" = "no" ] && [ "$before" = "$after" ] && git diff --cached --quiet -- data/prices_live.csv data/venue_entries.csv ':(glob)results/*/manifest.json'; then
             echo "No new day, no new price and no change to the ledger or the rules."
             git reset -q
             git checkout -- results

@@ -100,7 +100,11 @@ def complete_through(positions: list[Position], prices: Prices) -> dt.date:
     raise RuntimeError("no session on which all positions can be valued")
 
 
-def simulate(positions: list[Position], prices: Prices, start_cash: float = 10_000.0, end: dt.date | None = None) -> Result:
+def simulate(positions: list[Position], prices: Prices, start_cash: float = 10_000.0, end: dt.date | None = None,
+             early: dict[int, float] | None = None) -> Result:
+    """`early` holds, for calls bought on a venue before the close, what a dollar put in there was worth at the close the
+    rule buys at. Such a call gets the same dollars as any other on its entry day, times that figure: the difference is that
+    day's gain or loss from buying early. It applies only to a call this book buys on its own entry day."""
     end = end or complete_through(positions, prices)
     pos = {p.call.call_id: p for p in positions if p.entry is not None and p.entry <= end}
     if not pos:
@@ -132,6 +136,9 @@ def simulate(positions: list[Position], prices: Prices, start_cash: float = 10_0
                 if call_value(pos[k].call, pos[k].entry, d, prices) is None:
                     raise RuntimeError(f"call {k} has no entry price on {d}")
                 last_value[k] = 1.0
+                if early and k in early and pos[k].entry == pos[k].rule_entry:
+                    gain = hold[k] * (max(early[k], 0.0) - 1.0)
+                    hold[k] += gain; made[k] = made.get(k, 0.0) + gain; equity += gain
         out.dates.append(d); out.equity.append(equity); out.n_active.append(len(hold)); out.n_trades.append(len(ending) + len(starting))
         out.call_pnl.append(made)
     out.holdings = dict(hold)

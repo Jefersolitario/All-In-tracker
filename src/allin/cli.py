@@ -24,7 +24,7 @@ import tomllib
 
 import polars as pl
 
-from . import contract, engine, episodes, prices
+from . import contract, engine, episodes, prices, venue
 from .ledger import COLUMNS, Call, field_spans, load_calls, plus_year
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -48,6 +48,9 @@ def load_config(path: pathlib.Path) -> dict:
         if s.get("calls", "all") not in FILTERS:
             raise ValueError(f"{s['id']}: calls must be one of {sorted(FILTERS)}")
         s["role"] = s.get("role", "portfolio") if s.get("paper", False) else "tested"
+        s["entry"] = s.get("entry", "close")
+        if s["entry"] not in ("close", "venue"):
+            raise ValueError(f"{s['id']}: entry must be 'close' or 'venue'")
         if s["role"] not in ("portfolio", "monitor", "tested"):
             raise ValueError(f"{s['id']}: role must be 'portfolio' or 'monitor'")
     return cfg
@@ -270,20 +273,27 @@ def positions_csv(res: engine.Result, book: str, store: prices.Prices) -> bytes:
     return buf.getvalue().encode()
 
 
-def build(calls: list[Call], store: prices.Prices, cfg: dict, now_utc: dt.datetime, bills: list[tuple[dt.date, float]] | None = None) -> dict:
-    """Everything that gets published, computed from the ledger and the stored prices alone."""
-    bills = bills or []
+def build(calls: list[Call], store: prices.Prices, cfg: dict, now_utc: dt.datetime, bills: list[tuple[dt.date, float]] | None = None,
+          entries: list[venue.Entry] | None = None) -> dict:
+    """Everything that gets published, computed from the ledger, the stored prices and the venue buys on file."""
+    bills = bills or []; entries = entries or []
     sessions = store.sessions()
     through = publishable_through(engine.plan(calls, sessions), store, now_utc)
     bt_end = max((d for d in sessions if d < cfg["paper_start"] and d <= through), default=None)
+    bought_early = venue.factors(entries, calls)
+    if any(s.get("entry") == "venue" for s in cfg["strategy"]):
+        late = venue.not_looked_up(entries, calls, sessions, cfg["recovered_calls_through"], through)
+        if late:
+            raise RuntimeError(f"calls {late} have entered and their venue prices are not in {venue.ENTRIES}. Run with --fetch: the job looks them up before it publishes the day.")
     bench_t = cfg.get("benchmark", "SPY")
     daily, rows, books = {}, [], {}
     for s in cfg["strategy"]:
         mine = [c for c in calls if FILTERS[s.get("calls", "all")](c)]
         table = pl.DataFrame(schema=contract.DAILY_SCHEMA); book = None
+        early = bought_early if s.get("entry") == "venue" else None
         plan = engine.plan(mine, sessions)
         if bt_end is not None and any(p.entry is not None and p.entry <= bt_end for p in plan):
-            bt = engine.simulate(plan, store, cfg["start_cash"], end=bt_end)
+            bt = engine.simulate(plan, store, cfg["start_cash"], end=bt_end, early=early)
             if bt.dates[0] < cfg["backtest_start"]:
                 raise ValueError(f"{s['id']}: a call enters before backtest_start")
             bench = [store.on(bench_t, d) for d in bt.dates]
@@ -293,7 +303,7 @@ def build(calls: list[Call], store: prices.Prices, cfg: dict, now_utc: dt.dateti
             continue
         plan = engine.plan(mine, sessions, not_before=cfg["paper_start"])
         if any(p.entry is not None and p.entry <= through for p in plan):
-            paper = engine.simulate(plan, store, cfg["start_cash"], end=through)       # the paper book starts in cash on paper_start
+            paper = engine.simulate(plan, store, cfg["start_cash"], end=through, early=early)       # the paper book starts in cash on paper_start
             table = pl.concat([table, daily_table(paper, "paper")]); book = ("paper", paper)
         if book is not None:                                                            # a strategy none of whose calls has entered yet publishes nothing
             daily[s["id"]] = table; books[s["id"]] = book
@@ -323,7 +333,7 @@ def publish(out: str, cfg: dict, built: dict, store: prices.Prices, n_calls: int
         manifest = {"id": s["id"], "name": s["name"], "market": "US-listed stocks and ETFs, with some crypto and foreign shares", "currency": "USD",
                     "days_per_year": DAYS_PER_YEAR, "backtest_start": cfg["backtest_start"], "paper_start": cfg["paper_start"], "description": s.get("description", ""),
                     "start_cash_usd": cfg["start_cash"], "code_version": code, "ledger_version": ledger, "calls_in_ledger": n_calls,
-                    "source_repo": cfg["source"], "role": s["role"]}
+                    "source_repo": cfg["source"], "role": s["role"], "entry": s.get("entry", "close")}
         if not allow_restate:
             check_book_unchanged(contract.read_parquet("/".join([out.rstrip("/"), s["id"], "daily.parquet"])), built["daily"][s["id"]])
         contract.publish_strategy(out, manifest, built["daily"][s["id"]], allow_restate=allow_restate)
@@ -345,8 +355,8 @@ def show(built: dict, store: prices.Prices) -> None:
               + (f" (paper PnL {paper['pnl'].sum():+,.2f} USD)" if paper.height else "") + f"; {book} book holds {len(res.holdings)} calls worth {sum(res.holdings.values()):,.2f} USD")
 
 
-def main(argv: list[str] | None = None, now: dt.datetime | None = None, fetch=None) -> int:
-    """`now` and `fetch` stand in for the clock and the data vendor in tests."""
+def main(argv: list[str] | None = None, now: dt.datetime | None = None, fetch=None, venue_fetch: dict | None = None) -> int:
+    """`now`, `fetch` and `venue_fetch` stand in for the clock, the data vendor and the 24/7 venues in tests."""
     ap = argparse.ArgumentParser(prog="allin")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, text in (("run", "recompute and publish"), ("status", "print the book without writing anything"),
@@ -399,7 +409,14 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None, fetch=No
         store = prices.load_prices(a.data)
         plan = engine.plan(calls, store.sessions())
         check_not_stalled(store, publishable_through(plan, store, now), plan)
-    built = build(calls, store, cfg, now, load_bills(a.data))
+        if any(s.get("entry") == "venue" for s in cfg["strategy"]):
+            looked_up = venue.update(a.data, calls, store.sessions(), cfg["recovered_calls_through"], now, venue_fetch)
+            for e in looked_up:
+                print(f"venue: call {e.call_id} {e.ticker}: " + (f"bought at {e.entry_price:g} on {e.venue} at {e.entry_utc:%Y-%m-%d %H:%M} UTC, {e.close_price:g} when the rule buys "
+                                                                 f"({100 * (e.ratio - 1):+.2f}%)" if e.ratio is not None else f"waits for the close ({e.basis})"))
+    entries = venue.load_entries(a.data)
+    venue.check(entries, ledger, store.sessions(), cfg["recovered_calls_through"])
+    built = build(calls, store, cfg, now, load_bills(a.data), entries)
     if a.cmd == "run":
         publish(a.out, cfg, built, store, len(ledger), allow_restate=a.allow_restate, now_utc=now, calls_path=a.calls, config_path=a.config)
     show(built, store)

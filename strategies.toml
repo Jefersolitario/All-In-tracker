@@ -11,7 +11,7 @@ screening_start = "2026-09-26"   # episodes published before this day were scree
 
 [[strategy]]
 id = "allin_12m"
-name = "All-In calls, 12-month hold"
+name = "All-In calls: at the close"
 calls = "all"
 paper = true
 role = "monitor"
@@ -26,3 +26,15 @@ calls = "hosts"
 id = "allin_12m_guests"
 name = "All-In calls by guests, 12-month hold"
 calls = "guests"
+
+# The same book as allin_12m with one difference: a call is bought on a 24/7 venue at the first hourly open after it was
+# recorded, not at the next session's close. data/venue_symbols.csv says where each ticker trades; a ticker that is not
+# there, or has no price there, waits for the close. The buys are written once to data/venue_entries.csv.
+[[strategy]]
+id = "allin_247"
+name = "All-In calls: 24/7"
+calls = "all"
+paper = true
+role = "monitor"
+entry = "venue"
+description = "Monitoring only. The same portfolio as allin_12m with one difference: a new call is bought on a venue that trades around the clock (Hyperliquid stock contracts, Binance for crypto) at the first hourly open after the call was recorded, instead of at the close of the next US session. The gain or loss from buying early is the venue's own price at that close over its price at the buy, and it lands on the entry day; after that the two strategies hold the same thing. A ticker with no venue market waits for the close. In the backtest, the calls that had a venue market at the time are bought one hour after their episode. Before fees, spread and funding."
