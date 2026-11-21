@@ -165,6 +165,21 @@ def main():
                 cov.append(["binance", market + ":" + sym, iv, len(got)])
         coverage[c["id"]] = {"published_utc": c["pub"].strftime("%Y-%m-%dT%H:%M:%SZ"), "legs": c["legs"], "got": cov}
     status["coverage"] = coverage
+    # ---- funding paid on the Hyperliquid contracts over the same windows
+    funding = []
+    for c in calls:
+        start = c["pub"] - dt.timedelta(days=2); end = min(c["pub"] + dt.timedelta(days=8), now)
+        for t in c["legs"]:
+            for coin in hl_map.get(t, []):
+                if not any(r[0] == "hyperliquid" and r[2] == coin and r[10] == c["id"] for r in rows):
+                    continue
+                got = http(HL, {"type": "fundingHistory", "coin": coin, "startTime": ms(start), "endTime": ms(end)}, f"hl funding {coin} {start:%Y-%m-%d}")
+                time.sleep(0.25)
+                funding += [(c["id"], coin, iso(f["time"]), f.get("fundingRate", ""), f.get("premium", "")) for f in (got or []) if isinstance(f, dict) and "time" in f]
+    with open(OUT / "funding.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(("call_id", "coin", "time_utc", "funding_rate", "premium")); w.writerows(funding)
+    status["funding_rows"] = len(funding)
     status["rows"] = len(rows)
     with open(OUT / "candles.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, lineterminator="\n")
