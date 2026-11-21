@@ -2,8 +2,9 @@
   "contract_version": 1,
   "source": "all-in-tracker",
   "strategies": [
-    "allin_12m"
+    "allin_12m",
+    "allin_247"
   ],
-  "updated_utc": "2026-11-21T09:52:04Z",
+  "updated_utc": "2026-11-21T11:36:34Z",
   "data_through": "2026-11-19"
 }
