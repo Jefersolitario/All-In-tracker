@@ -1600,6 +1600,7 @@
   "binance futures exchangeInfo https://fapi.binance.com: HTTP 451 b'{\\n  \"code\": 0,\\n  \"msg\": \"Service unavailable from a restricted location according to \\'b. Eligibility\\' in https://www.binance.com/en/terms. Please contact customer service if you believe you received t'",
   "binance futures exchangeInfo https://fapi1.binance.com: JSONDecodeError: Expecting value: line 1 column 1 (char 0)"
  ],
+ "funding_rows": 5724,
  "hl_dexs": [
   "",
   "xyz",
@@ -2066,5 +2067,5 @@
  },
  "requests": [],
  "rows": 10678,
- "started_utc": "2026-11-21T10:10:16Z"
+ "started_utc": "2026-11-21T10:43:11Z"
 }
