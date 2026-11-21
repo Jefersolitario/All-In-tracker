@@ -1,0 +1,39 @@
+name: venue-prices
+
+# Research only, on its own branch: downloads public candles from Hyperliquid and Binance around each call.
+# No key, no account. It never runs on main and the paper job never reads what it writes.
+on:
+  push:
+    branches: [claude/venue-prices]
+    paths: ["research/fetch_venue_prices.py", ".github/workflows/venue-prices.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: venue-prices
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    if: github.ref == 'refs/heads/claude/venue-prices'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Download candles
+        run: python research/fetch_venue_prices.py
+      - name: Commit the files to this branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add research/venues
+          if git diff --cached --quiet; then echo "Nothing new."; else
+            git commit -m "research: venue candles"
+            git pull --rebase origin claude/venue-prices
+            git push origin HEAD:claude/venue-prices
+          fi
