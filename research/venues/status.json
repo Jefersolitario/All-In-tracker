@@ -1,0 +1,2070 @@
+{
+ "binance_fut_base": null,
+ "binance_fut_stocklike": [],
+ "binance_fut_symbols": 0,
+ "binance_fut_types": [],
+ "binance_map": {
+  "AAPL": [
+   [
+    "spot",
+    "AAPLBUSDT",
+    "TRADING"
+   ]
+  ],
+  "AMAT": [
+   [
+    "spot",
+    "AMATBUSDT",
+    "TRADING"
+   ]
+  ],
+  "AMZN": [
+   [
+    "spot",
+    "AMZNBUSDT",
+    "TRADING"
+   ]
+  ],
+  "BABA": [
+   [
+    "spot",
+    "BABABUSDT",
+    "TRADING"
+   ]
+  ],
+  "BTC-USD": [
+   [
+    "spot",
+    "BTCUSDT",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "BTCUSDC",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "BTCFDUSD",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "BTCUSD",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "BTCUSD1",
+    "TRADING"
+   ]
+  ],
+  "CRM": [
+   [
+    "spot",
+    "CRMBUSDT",
+    "TRADING"
+   ]
+  ],
+  "DASH": [
+   [
+    "spot",
+    "DASHUSDT",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "DASHUSDC",
+    "TRADING"
+   ]
+  ],
+  "GLD": [
+   [
+    "spot",
+    "PAXGUSDT",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "PAXGUSDC",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "PAXGUSD1",
+    "TRADING"
+   ]
+  ],
+  "GOOG": [
+   [
+    "spot",
+    "GOOGLBUSDT",
+    "TRADING"
+   ]
+  ],
+  "META": [
+   [
+    "spot",
+    "METABUSDT",
+    "TRADING"
+   ]
+  ],
+  "MSFT": [
+   [
+    "spot",
+    "MSFTBUSDT",
+    "TRADING"
+   ]
+  ],
+  "MU": [
+   [
+    "spot",
+    "MUBUSDT",
+    "TRADING"
+   ]
+  ],
+  "NFLX": [
+   [
+    "spot",
+    "NFLXBUSDT",
+    "TRADING"
+   ]
+  ],
+  "NVDA": [
+   [
+    "spot",
+    "NVDABUSDT",
+    "TRADING"
+   ]
+  ],
+  "SMH": [
+   [
+    "spot",
+    "SMHBUSDT",
+    "TRADING"
+   ]
+  ],
+  "SNDK": [
+   [
+    "spot",
+    "SNDKBUSDT",
+    "TRADING"
+   ]
+  ],
+  "SOL-USD": [
+   [
+    "spot",
+    "SOLUSDT",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "SOLUSDC",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "SOLFDUSD",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "SOLUSD1",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "SOLUSD",
+    "TRADING"
+   ]
+  ],
+  "SPCX": [
+   [
+    "spot",
+    "SPCXBUSDT",
+    "TRADING"
+   ]
+  ],
+  "SPY": [
+   [
+    "spot",
+    "SPYBUSDT",
+    "TRADING"
+   ]
+  ],
+  "TAO-USD": [
+   [
+    "spot",
+    "TAOUSDT",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "TAOFDUSD",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "TAOUSDC",
+    "TRADING"
+   ],
+   [
+    "spot",
+    "TAOUSD1",
+    "TRADING"
+   ]
+  ],
+  "TSLA": [
+   [
+    "spot",
+    "TSLABUSDT",
+    "TRADING"
+   ]
+  ]
+ },
+ "binance_spot_base": "https://data-api.binance.vision",
+ "binance_spot_stocklike": [
+  "1000CAT",
+  "AAPLB",
+  "AGLD",
+  "AMATB",
+  "AMZNB",
+  "BABAB",
+  "BKRW",
+  "CATI",
+  "CRMB",
+  "DASH",
+  "EGLD",
+  "GOOGLB",
+  "METAB",
+  "MSFTB",
+  "NFLXB",
+  "NVDAB",
+  "SMHB",
+  "SNDKB",
+  "SPCXB",
+  "SPYB",
+  "TSLAB"
+ ],
+ "binance_spot_symbols": 3751,
+ "coverage": {
+  "1": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:AMZN",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:AMZNBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "AMZN"
+   ],
+   "published_utc": "2021-04-17T02:12:13Z"
+  },
+  "2": {
+   "got": [
+    [
+     "hyperliquid",
+     "BTC",
+     "1d",
+     10
+    ],
+    [
+     "binance",
+     "spot:BTCUSDT",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCUSDC",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCFDUSD",
+     "1h",
+     0
+    ],
+    [
+     "binance",
+     "spot:BTCUSD",
+     "1h",
+     0
+    ],
+    [
+     "binance",
+     "spot:BTCUSD1",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "BTC-USD"
+   ],
+   "published_utc": "2021-05-22T04:09:12Z"
+  },
+  "3": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:MSFT",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:MSFTBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:GOOGL",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:GOOGLBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:AAPL",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:AAPL",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:AAPLBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:META",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:META",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:METABUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:AMZN",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:AMZNBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:NFLX",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:NFLXBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "MSFT",
+    "GOOG",
+    "AAPL",
+    "META",
+    "AMZN",
+    "NFLX"
+   ],
+   "published_utc": "2021-11-06T06:04:07Z"
+  },
+  "4": {
+   "got": [
+    [
+     "hyperliquid",
+     "SOL",
+     "1d",
+     10
+    ],
+    [
+     "binance",
+     "spot:SOLUSDT",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:SOLUSDC",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:SOLFDUSD",
+     "1h",
+     0
+    ],
+    [
+     "binance",
+     "spot:SOLUSD1",
+     "1h",
+     0
+    ],
+    [
+     "binance",
+     "spot:SOLUSD",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "SOL-USD"
+   ],
+   "published_utc": "2021-11-13T08:34:13Z"
+  },
+  "5": {
+   "got": [],
+   "legs": [
+    "DIS"
+   ],
+   "published_utc": "2021-12-29T08:56:27Z"
+  },
+  "6": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:CL",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:XLE",
+     null,
+     0
+    ]
+   ],
+   "legs": [
+    "XLE",
+    "ITA"
+   ],
+   "published_utc": "2021-12-29T08:56:27Z"
+  },
+  "7": {
+   "got": [],
+   "legs": [
+    "GLNCY",
+    "VALE"
+   ],
+   "published_utc": "2022-05-31T19:43:01Z"
+  },
+  "8": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:META",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:META",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:METABUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "DIS",
+    "WBD",
+    "META"
+   ],
+   "published_utc": "2022-12-24T07:15:00Z"
+  },
+  "9": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:AMAT",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:AMATBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "AMAT",
+    "KLAC",
+    "SLB",
+    "BKR",
+    "DE",
+    "CAT",
+    "TMO",
+    "DHR",
+    "HON"
+   ],
+   "published_utc": "2023-01-06T10:51:00Z"
+  },
+  "10": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:META",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:META",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:METABUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "META"
+   ],
+   "published_utc": "2023-02-04T01:57:00Z"
+  },
+  "11": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:GOOGL",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:GOOGLBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "GOOG"
+   ],
+   "published_utc": "2023-06-16T20:55:00Z"
+  },
+  "12": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:NFLX",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:NFLXBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "NFLX"
+   ],
+   "published_utc": "2023-07-14T17:02:00Z"
+  },
+  "13": {
+   "got": [],
+   "legs": [
+    "URA"
+   ],
+   "published_utc": "2024-01-06T05:48:00Z"
+  },
+  "14": {
+   "got": [
+    [
+     "binance",
+     "spot:DASHUSDT",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:DASHUSDC",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "UBER",
+    "DASH",
+    "ABNB"
+   ],
+   "published_utc": "2024-01-06T05:48:00Z"
+  },
+  "15": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:AAPL",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:AAPL",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:AAPLBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "AAPL"
+   ],
+   "published_utc": "2024-03-22T18:51:00Z"
+  },
+  "16": {
+   "got": [
+    [
+     "binance",
+     "spot:CRMBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "CRM"
+   ],
+   "published_utc": "2024-05-31T21:55:00Z"
+  },
+  "17": {
+   "got": [
+    [
+     "hyperliquid",
+     "BTC",
+     "4h",
+     61
+    ],
+    [
+     "binance",
+     "spot:BTCUSDT",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCUSDC",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCFDUSD",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCUSD",
+     "1h",
+     0
+    ],
+    [
+     "binance",
+     "spot:BTCUSD1",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "BTC-USD"
+   ],
+   "published_utc": "2024-12-07T00:55:00Z"
+  },
+  "18": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:MU",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:MU",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:MUBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:SKHX",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:SKHX",
+     null,
+     0
+    ]
+   ],
+   "legs": [
+    "MU",
+    "SKH-USD"
+   ],
+   "published_utc": "2025-01-04T00:23:00Z"
+  },
+  "19": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:BABA",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:BABABUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "BABA"
+   ],
+   "published_utc": "2025-01-04T00:23:00Z"
+  },
+  "20": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:AAPL",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:AAPL",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:AAPLBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:MSFT",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:MSFTBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:GOOGL",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:GOOGLBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:AMZN",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:AMZNBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:NVDA",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:NVDA",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:NVDABUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:META",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:META",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:METABUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:TSLA",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:TSLABUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "AAPL",
+    "MSFT",
+    "GOOG",
+    "AMZN",
+    "NVDA",
+    "META",
+    "TSLA"
+   ],
+   "published_utc": "2025-01-04T00:23:00Z"
+  },
+  "21": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:NVDA",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:NVDA",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:NVDABUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "NVDA"
+   ],
+   "published_utc": "2025-01-11T01:41:00Z"
+  },
+  "22": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:GOLD",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:PAXGUSDT",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:PAXGUSDC",
+     "1h",
+     0
+    ],
+    [
+     "binance",
+     "spot:PAXGUSD1",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "GLD"
+   ],
+   "published_utc": "2025-01-28T16:00:00Z"
+  },
+  "23": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:NVDA",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "io:NVDA",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:NVDABUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "NVDA"
+   ],
+   "published_utc": "2025-02-21T23:41:00Z"
+  },
+  "24": {
+   "got": [
+    [
+     "hyperliquid",
+     "BTC",
+     "4h",
+     61
+    ],
+    [
+     "binance",
+     "spot:BTCUSDT",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCUSDC",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCFDUSD",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCUSD",
+     "1h",
+     0
+    ],
+    [
+     "binance",
+     "spot:BTCUSD1",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "BTC-USD"
+   ],
+   "published_utc": "2025-04-03T01:15:00Z"
+  },
+  "25": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:GOOGL",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:GOOGLBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "GOOG"
+   ],
+   "published_utc": "2025-05-09T20:26:00Z"
+  },
+  "26": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:SP500",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:SPYBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "SPY"
+   ],
+   "published_utc": "2025-06-28T04:51:00Z"
+  },
+  "27": {
+   "got": [
+    [
+     "hyperliquid",
+     "TAO",
+     "4h",
+     61
+    ],
+    [
+     "binance",
+     "spot:TAOUSDT",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:TAOFDUSD",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:TAOUSDC",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:TAOUSD1",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "TAO-USD"
+   ],
+   "published_utc": "2025-10-03T16:39:00Z"
+  },
+  "28": {
+   "got": [
+    [
+     "hyperliquid",
+     "BTC",
+     "4h",
+     61
+    ],
+    [
+     "binance",
+     "spot:BTCUSDT",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCUSDC",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCFDUSD",
+     "1h",
+     240
+    ],
+    [
+     "binance",
+     "spot:BTCUSD",
+     "1h",
+     0
+    ],
+    [
+     "binance",
+     "spot:BTCUSD1",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "BTC-USD"
+   ],
+   "published_utc": "2025-10-14T02:22:00Z"
+  },
+  "29": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:TSLA",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:TSLABUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "TSLA"
+   ],
+   "published_utc": "2025-10-24T22:38:00Z"
+  },
+  "30": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:COPPER",
+     "4h",
+     22
+    ]
+   ],
+   "legs": [
+    "CPER"
+   ],
+   "published_utc": "2026-01-10T04:28:00Z"
+  },
+  "31": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:AMZN",
+     "4h",
+     61
+    ],
+    [
+     "binance",
+     "spot:AMZNBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "AMZN"
+   ],
+   "published_utc": "2026-01-10T04:28:00Z"
+  },
+  "32": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:MU",
+     "1h",
+     241
+    ],
+    [
+     "hyperliquid",
+     "io:MU",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:MUBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:SNDK",
+     "1h",
+     241
+    ],
+    [
+     "hyperliquid",
+     "io:SNDK",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:SNDKBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:SKHX",
+     "1h",
+     241
+    ],
+    [
+     "hyperliquid",
+     "io:SKHX",
+     null,
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:SMSN",
+     "1h",
+     241
+    ]
+   ],
+   "legs": [
+    "MU",
+    "SNDK",
+    "SKH-USD",
+    "SAMSUNG-USD"
+   ],
+   "published_utc": "2026-05-08T22:16:00Z"
+  },
+  "33": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:MSFT",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:MSFTBUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:META",
+     "1h",
+     241
+    ],
+    [
+     "hyperliquid",
+     "io:META",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:METABUSDT",
+     "1h",
+     0
+    ],
+    [
+     "hyperliquid",
+     "xyz:AMZN",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:AMZNBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "MSFT",
+    "META",
+    "AMZN"
+   ],
+   "published_utc": "2026-06-03T03:06:00Z"
+  },
+  "34": {
+   "got": [],
+   "legs": [
+    "PSUS",
+    "PS",
+    "HHH"
+   ],
+   "published_utc": "2026-06-03T03:06:00Z"
+  },
+  "35": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:NVDA",
+     "1h",
+     241
+    ],
+    [
+     "hyperliquid",
+     "io:NVDA",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:NVDABUSDT",
+     "1h",
+     50
+    ]
+   ],
+   "legs": [
+    "NVDA"
+   ],
+   "published_utc": "2026-06-05T19:18:00Z"
+  },
+  "36": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:GOOGL",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:GOOGLBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "GOOG"
+   ],
+   "published_utc": "2026-06-08T19:34:00Z"
+  },
+  "37": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:COPPER",
+     "1h",
+     241
+    ]
+   ],
+   "legs": [
+    "CPER"
+   ],
+   "published_utc": "2026-06-10T03:04:00Z"
+  },
+  "38": {
+   "got": [],
+   "legs": [
+    "MGM"
+   ],
+   "published_utc": "2026-06-12T01:25:00Z"
+  },
+  "39": {
+   "got": [],
+   "legs": [
+    "TLN"
+   ],
+   "published_utc": "2026-06-12T01:25:00Z"
+  },
+  "40": {
+   "got": [],
+   "legs": [
+    "AKTS"
+   ],
+   "published_utc": "2026-06-12T01:25:00Z"
+  },
+  "42": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:AAPL",
+     "1h",
+     241
+    ],
+    [
+     "hyperliquid",
+     "io:AAPL",
+     null,
+     0
+    ],
+    [
+     "binance",
+     "spot:AAPLBUSDT",
+     "1h",
+     0
+    ]
+   ],
+   "legs": [
+    "AAPL"
+   ],
+   "published_utc": "2026-07-18T00:36:00Z"
+  },
+  "43": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:GOOGL",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:GOOGLBUSDT",
+     "1h",
+     240
+    ]
+   ],
+   "legs": [
+    "GOOG"
+   ],
+   "published_utc": "2026-07-24T20:46:00Z"
+  },
+  "44": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:SPCX",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:SPCXBUSDT",
+     "1h",
+     240
+    ]
+   ],
+   "legs": [
+    "SPCX"
+   ],
+   "published_utc": "2026-08-08T00:32:00Z"
+  },
+  "45": {
+   "got": [],
+   "legs": [
+    "FIG"
+   ],
+   "published_utc": "2026-08-08T00:32:00Z"
+  },
+  "46": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:SMH",
+     "1h",
+     241
+    ],
+    [
+     "hyperliquid",
+     "para:SMH",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:SMHBUSDT",
+     "1h",
+     240
+    ]
+   ],
+   "legs": [
+    "SMH"
+   ],
+   "published_utc": "2026-10-12T15:49:00Z"
+  },
+  "47": {
+   "got": [],
+   "legs": [
+    "XLU"
+   ],
+   "published_utc": "2026-10-17T01:51:00Z"
+  },
+  "48": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:GOOGL",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:GOOGLBUSDT",
+     "1h",
+     240
+    ]
+   ],
+   "legs": [
+    "GOOG"
+   ],
+   "published_utc": "2026-10-30T21:44:00Z"
+  },
+  "49": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:SPCX",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:SPCXBUSDT",
+     "1h",
+     240
+    ],
+    [
+     "hyperliquid",
+     "xyz:TSLA",
+     "1h",
+     241
+    ],
+    [
+     "binance",
+     "spot:TSLABUSDT",
+     "1h",
+     240
+    ]
+   ],
+   "legs": [
+    "SPCX",
+    "TSLA"
+   ],
+   "published_utc": "2026-11-07T18:27:00Z"
+  },
+  "50": {
+   "got": [
+    [
+     "hyperliquid",
+     "xyz:NVDA",
+     "1h",
+     61
+    ],
+    [
+     "hyperliquid",
+     "io:NVDA",
+     "1h",
+     61
+    ],
+    [
+     "binance",
+     "spot:NVDABUSDT",
+     "1h",
+     60
+    ]
+   ],
+   "legs": [
+    "NVDA"
+   ],
+   "published_utc": "2026-11-20T22:14:00Z"
+  }
+ },
+ "errors": [
+  "binance futures exchangeInfo https://fapi.binance.com: HTTP 451 b'{\\n  \"code\": 0,\\n  \"msg\": \"Service unavailable from a restricted location according to \\'b. Eligibility\\' in https://www.binance.com/en/terms. Please contact customer service if you believe you received t'",
+  "binance futures exchangeInfo https://fapi1.binance.com: JSONDecodeError: Expecting value: line 1 column 1 (char 0)"
+ ],
+ "hl_dexs": [
+  "",
+  "xyz",
+  "flx",
+  "vntl",
+  "hyna",
+  "km",
+  "abcd",
+  "cash",
+  "para",
+  "mkts",
+  "io"
+ ],
+ "hl_map": {
+  "AAPL": [
+   "xyz:AAPL",
+   "io:AAPL"
+  ],
+  "AMAT": [
+   "xyz:AMAT"
+  ],
+  "AMZN": [
+   "xyz:AMZN"
+  ],
+  "BABA": [
+   "xyz:BABA"
+  ],
+  "BTC-USD": [
+   "BTC"
+  ],
+  "CPER": [
+   "xyz:COPPER"
+  ],
+  "GLD": [
+   "xyz:GOLD"
+  ],
+  "GOOG": [
+   "xyz:GOOGL"
+  ],
+  "META": [
+   "xyz:META",
+   "io:META"
+  ],
+  "MSFT": [
+   "xyz:MSFT"
+  ],
+  "MU": [
+   "xyz:MU",
+   "io:MU"
+  ],
+  "NFLX": [
+   "xyz:NFLX"
+  ],
+  "NVDA": [
+   "xyz:NVDA",
+   "io:NVDA"
+  ],
+  "SAMSUNG-USD": [
+   "xyz:SMSN"
+  ],
+  "SKH-USD": [
+   "xyz:SKHX",
+   "io:SKHX"
+  ],
+  "SMH": [
+   "xyz:SMH",
+   "para:SMH"
+  ],
+  "SNDK": [
+   "xyz:SNDK",
+   "io:SNDK"
+  ],
+  "SOL-USD": [
+   "SOL"
+  ],
+  "SPCX": [
+   "xyz:SPCX"
+  ],
+  "SPY": [
+   "xyz:SP500"
+  ],
+  "TAO-USD": [
+   "TAO"
+  ],
+  "TSLA": [
+   "xyz:TSLA"
+  ],
+  "XLE": [
+   "xyz:CL",
+   "xyz:XLE"
+  ]
+ },
+ "hl_universe": {
+  "abcd": [],
+  "cash": [],
+  "flx": [],
+  "hyna": [],
+  "io": [
+   "io:OAI",
+   "io:ANTH",
+   "io:SNDK",
+   "io:IONQ",
+   "io:NBIS",
+   "io:EWY",
+   "io:GPRO",
+   "io:TCNT",
+   "io:DRAM",
+   "io:PRL",
+   "io:XIAOMI",
+   "io:NVDA",
+   "io:SKHX",
+   "io:AAPL",
+   "io:CRCL",
+   "io:MU",
+   "io:META",
+   "io:INTC"
+  ],
+  "km": [],
+  "main": [
+   "BTC",
+   "ETH",
+   "ATOM",
+   "DYDX",
+   "SOL",
+   "AVAX",
+   "BNB",
+   "APE",
+   "OP",
+   "LTC",
+   "ARB",
+   "DOGE",
+   "INJ",
+   "SUI",
+   "kPEPE",
+   "CRV",
+   "LDO",
+   "LINK",
+   "STX",
+   "CFX",
+   "GMX",
+   "SNX",
+   "XRP",
+   "BCH",
+   "APT",
+   "AAVE",
+   "COMP",
+   "WLD",
+   "YGG",
+   "TRX",
+   "kSHIB",
+   "UNI",
+   "SEI",
+   "RUNE",
+   "ZRO",
+   "DOT",
+   "BANANA",
+   "TRB",
+   "BIGTIME",
+   "KAS",
+   "BLUR",
+   "TIA",
+   "BSV",
+   "ADA",
+   "MINA",
+   "POLYX",
+   "GAS",
+   "PENDLE",
+   "FET",
+   "NEAR",
+   "MEME",
+   "ORDI",
+   "NEO",
+   "ZEN",
+   "FIL",
+   "PYTH",
+   "SUSHI",
+   "IMX",
+   "kBONK",
+   "GMT",
+   "SUPER",
+   "JUP",
+   "kLUNC",
+   "RSR",
+   "GALA",
+   "JTO",
+   "ACE",
+   "WIF",
+   "CAKE",
+   "PEOPLE",
+   "ENS",
+   "ETC",
+   "XAI",
+   "MANTA",
+   "UMA",
+   "ONDO",
+   "ALT",
+   "ZETA",
+   "DYM",
+   "W",
+   "STRK",
+   "TAO",
+   "AR",
+   "kFLOKI",
+   "BOME",
+   "ETHFI",
+   "ENA",
+   "MNT",
+   "TNSR",
+   "SAGA",
+   "MERL",
+   "HBAR",
+   "POPCAT",
+   "EIGEN",
+   "REZ",
+   "NOT",
+   "TURBO",
+   "BRETT",
+   "IO",
+   "ZK",
+   "RENDER",
+   "POL",
+   "CELO",
+   "HMSTR",
+   "kNEIRO",
+   "GOAT",
+   "MOODENG",
+   "GRASS",
+   "PURR",
+   "PNUT",
+   "XLM",
+   "SAND",
+   "IOTA",
+   "ALGO",
+   "HYPE",
+   "ME",
+   "MOVE",
+   "VIRTUAL",
+   "PENGU",
+   "USUAL",
+   "FARTCOIN",
+   "AIXBT",
+   "BIO",
+   "GRIFFAIN",
+   "SPX",
+   "S",
+   "MORPHO",
+   "TRUMP",
+   "MELANIA",
+   "ANIME",
+   "VVV",
+   "BERA",
+   "LAYER",
+   "KAITO",
+   "NIL",
+   "PAXG",
+   "BABY",
+   "WCT",
+   "HYPER",
+   "ZORA",
+   "INIT",
+   "NXPC",
+   "SOPH",
+   "RESOLV",
+   "SYRUP",
+   "PUMP",
+   "PROVE",
+   "XPL",
+   "WLFI",
+   "LINEA",
+   "SKY",
+   "ASTER",
+   "AVNT",
+   "STBL",
+   "0G",
+   "HEMI",
+   "APEX",
+   "2Z",
+   "ZEC",
+   "MON",
+   "MET",
+   "MEGA",
+   "CC",
+   "ICP",
+   "AERO",
+   "STABLE",
+   "FOGO",
+   "LIT",
+   "XMR",
+   "AXS",
+   "DASH",
+   "SKR",
+   "AZTEC",
+   "CHIP",
+   "GRAM",
+   "CASHCAT",
+   "PONS",
+   "USELESS",
+   "XTEN"
+  ],
+  "mkts": [
+   "mkts:BVIV"
+  ],
+  "para": [
+   "para:TOTAL2",
+   "para:OTHERS",
+   "para:BTCD",
+   "para:AVGO",
+   "para:COHR",
+   "para:GLW",
+   "para:CRDO",
+   "para:LRCX",
+   "para:NET",
+   "para:STX",
+   "para:IREN",
+   "para:VST",
+   "para:TER",
+   "para:AAOI",
+   "para:10Y",
+   "para:CIEN",
+   "para:RDDT",
+   "para:UNITREE",
+   "para:CRWD",
+   "para:MELI",
+   "para:SMCI",
+   "para:ANSEM",
+   "para:30Y",
+   "para:2Y",
+   "para:IGV",
+   "para:SOFI",
+   "para:ANTH",
+   "para:TTWO",
+   "para:CIFR",
+   "para:TREAD",
+   "para:DRV",
+   "para:GDX",
+   "para:SMH"
+  ],
+  "vntl": [],
+  "xyz": [
+   "xyz:XYZ100",
+   "xyz:TSLA",
+   "xyz:NVDA",
+   "xyz:GOLD",
+   "xyz:HOOD",
+   "xyz:INTC",
+   "xyz:PLTR",
+   "xyz:COIN",
+   "xyz:META",
+   "xyz:AAPL",
+   "xyz:MSFT",
+   "xyz:ORCL",
+   "xyz:GOOGL",
+   "xyz:AMZN",
+   "xyz:AMD",
+   "xyz:MU",
+   "xyz:SNDK",
+   "xyz:MSTR",
+   "xyz:CRCL",
+   "xyz:NFLX",
+   "xyz:COST",
+   "xyz:LLY",
+   "xyz:SKHX",
+   "xyz:TSM",
+   "xyz:JPY",
+   "xyz:EUR",
+   "xyz:SILVER",
+   "xyz:RIVN",
+   "xyz:BABA",
+   "xyz:CL",
+   "xyz:COPPER",
+   "xyz:NATGAS",
+   "xyz:SMSN",
+   "xyz:PLATINUM",
+   "xyz:USAR",
+   "xyz:CRWV",
+   "xyz:URNM",
+   "xyz:PALLADIUM",
+   "xyz:GME",
+   "xyz:KR200",
+   "xyz:SOFTBANK",
+   "xyz:JP225",
+   "xyz:HYUNDAI",
+   "xyz:KIOXIA",
+   "xyz:EWY",
+   "xyz:EWJ",
+   "xyz:BRENTOIL",
+   "xyz:HIMS",
+   "xyz:SP500",
+   "xyz:DKNG",
+   "xyz:LITE",
+   "xyz:XLE",
+   "xyz:BX",
+   "xyz:PURRDAT",
+   "xyz:MRVL",
+   "xyz:RKLB",
+   "xyz:BIRD",
+   "xyz:DRAM",
+   "xyz:CBRS",
+   "xyz:EWZ",
+   "xyz:ZM",
+   "xyz:EBAY",
+   "xyz:NIFTY",
+   "xyz:ARM",
+   "xyz:EWT",
+   "xyz:GBP",
+   "xyz:SPCX",
+   "xyz:ASML",
+   "xyz:MINIMAX",
+   "xyz:BB",
+   "xyz:QNT",
+   "xyz:DELL",
+   "xyz:IBM",
+   "xyz:AVGO",
+   "xyz:NOW",
+   "xyz:NBIS",
+   "xyz:WDC",
+   "xyz:NOK",
+   "xyz:SMH",
+   "xyz:BE",
+   "xyz:ZHIPU",
+   "xyz:QCOM",
+   "xyz:STRC",
+   "xyz:BOT",
+   "xyz:AMAT",
+   "xyz:GIGADEV",
+   "xyz:SHAZ",
+   "xyz:SKHY",
+   "xyz:KSTR",
+   "xyz:CXMT",
+   "xyz:GEV",
+   "xyz:KORU",
+   "xyz:UNITREE",
+   "xyz:LYTE",
+   "xyz:NCLD",
+   "xyz:SOXL",
+   "xyz:MAGS",
+   "xyz:IREN",
+   "xyz:NET",
+   "xyz:CRWD",
+   "xyz:RDDT",
+   "xyz:AAOI",
+   "xyz:MRNA",
+   "xyz:XBI",
+   "xyz:SHEIN",
+   "xyz:BMNR",
+   "xyz:SNXX",
+   "xyz:CVX",
+   "xyz:TLT",
+   "xyz:HO",
+   "xyz:OURA",
+   "xyz:LRCX",
+   "xyz:UMC",
+   "xyz:CAMBRICON",
+   "xyz:TWST",
+   "xyz:GLW",
+   "xyz:RELIANCE",
+   "xyz:JIO",
+   "xyz:TTWO",
+   "xyz:MUU",
+   "xyz:ANT",
+   "xyz:ICE",
+   "xyz:PANW"
+  ]
+ },
+ "requests": [],
+ "rows": 10678,
+ "started_utc": "2026-11-21T10:10:16Z"
+}
