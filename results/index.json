@@ -1,0 +1,9 @@
+{
+  "contract_version": 1,
+  "source": "all-in-tracker",
+  "strategies": [
+    "allin_12m"
+  ],
+  "updated_utc": "2026-11-19T14:16:44Z",
+  "data_through": "2026-11-18"
+}
