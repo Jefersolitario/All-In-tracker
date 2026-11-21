@@ -958,7 +958,7 @@ def test_build_and_publish(tmp_path, calls, store, cfg):
     assert table.filter(pl.col("mode") == "backtest")["date"].max() < cfg["paper_start"]
     assert 10_000 + table.filter(pl.col("date") <= MARK)["pnl"].sum() == pytest.approx(24_634.14, abs=0.5)
     summary = built["summary"]
-    assert set(summary["strategy_id"]) == {"allin_12m", "allin_12m_hosts", "allin_12m_guests", "allin_12m_early", "spy_buy_hold"}
+    assert set(summary["strategy_id"]) == {"allin_12m", "allin_12m_hosts", "allin_12m_guests", "allin_247", "spy_buy_hold"}
     assert summary.filter(pl.col("paper_traded"))["role"].to_list() == ["monitor", "monitor"]
     with_bills = cli.build(calls, store, cfg, now, cli.load_bills(ROOT / "data"))["summary"]
     both = dict(zip(with_bills["strategy_id"], with_bills["sharpe_vs_bills"]))
@@ -966,7 +966,7 @@ def test_build_and_publish(tmp_path, calls, store, cfg):
     out = str(tmp_path / "results")
     cli.publish(out, cfg, built, store, len(calls), now_utc=now)
     index = json.loads((tmp_path / "results" / "index.json").read_text())
-    assert index["contract_version"] == 1 and index["strategies"] == ["allin_12m", "allin_12m_early"] and index["data_through"] == str(store.sessions()[-1])
+    assert index["contract_version"] == 1 and index["strategies"] == ["allin_12m", "allin_247"] and index["data_through"] == str(store.sessions()[-1])
     manifest = json.loads((tmp_path / "results" / "allin_12m" / "manifest.json").read_text())
     contract.validate_manifest(manifest)
     assert manifest["role"] == "monitor" and manifest["days_per_year"] == 252

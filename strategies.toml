@@ -11,7 +11,7 @@ screening_start = "2026-09-26"   # episodes published before this day were scree
 
 [[strategy]]
 id = "allin_12m"
-name = "All-In calls, 12-month hold"
+name = "All-In calls: at the close"
 calls = "all"
 paper = true
 role = "monitor"
@@ -31,8 +31,8 @@ calls = "guests"
 # recorded, not at the next session's close. data/venue_symbols.csv says where each ticker trades; a ticker that is not
 # there, or has no price there, waits for the close. The buys are written once to data/venue_entries.csv.
 [[strategy]]
-id = "allin_12m_early"
-name = "All-In calls, 12-month hold, bought on a 24/7 venue"
+id = "allin_247"
+name = "All-In calls: 24/7"
 calls = "all"
 paper = true
 role = "monitor"

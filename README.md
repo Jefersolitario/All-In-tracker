@@ -49,9 +49,9 @@ For these reasons the strategy is published with `role = "monitor"`: the dashboa
 
 ## The second strategy: bought on a 24/7 venue
 
-`allin_12m_early` holds the same book as `allin_12m` and sells on the same days. The one difference is when a new call is bought.
+The dashboard shows two strategies: **All-In calls: at the close** (id `allin_12m`) and **All-In calls: 24/7** (id `allin_247`). The 24/7 one holds the same book as the first and sells on the same days. The one difference is when a new call is bought.
 
-- **When:** at the first hourly open after the job stamped the call, on a venue that trades around the clock. `allin_12m` waits for the close of the next US session.
+- **When:** at the first hourly open after the job stamped the call, on a venue that trades around the clock. "At the close" waits for the close of the next US session.
 - **Where:** `data/venue_symbols.csv` names the venue and symbol for each ticker: Hyperliquid's stock and commodity contracts, Binance for cryptocurrencies. The file is yours to edit. A ticker that is not in it, or has no candle within six hours of the buy or of the close, waits for the close like in the first strategy.
 - **What it is worth:** the venue's own price when the rule buys, divided by its price at the early buy. The call gets the same dollars as in the first strategy, times that ratio, and the difference is booked on the entry day. From then on both strategies hold the same thing and are valued with the same official closes.
 - **The record:** each buy is written once to `data/venue_entries.csv` by the job: the two times, the two prices and the venue. The times follow from the stamp and the calendar, and the run refuses a line whose times do not. The prices are the venue's public hourly candles, so a line can be checked afterwards.

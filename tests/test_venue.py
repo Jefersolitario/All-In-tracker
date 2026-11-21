@@ -160,7 +160,7 @@ def test_the_early_strategy_in_the_backtest(tmp_path):
     store = prices.load_prices(tmp_path)                                                            # the frozen snapshot: these figures never move
     lines = [e for e in venue.load_entries(ROOT / "data") if e.call_id <= cfg["recovered_calls_through"]]
     built = cli.build(calls, store, cfg, dt.datetime(2026, 11, 19, 7, 0, tzinfo=UTC), entries=lines)
-    plain, early = built["daily"]["allin_12m"], built["daily"]["allin_12m_early"]
+    plain, early = built["daily"]["allin_12m"], built["daily"]["allin_247"]
     assert plain["date"].to_list() == early["date"].to_list() and plain["n_trades"].to_list() == early["n_trades"].to_list()
     at_mark = lambda t: 10_000 + t.filter(pl.col("date") <= MARK)["pnl"].sum()                      # noqa: E731
     assert at_mark(plain) == pytest.approx(24_634.14, abs=0.5)
@@ -168,7 +168,7 @@ def test_the_early_strategy_in_the_backtest(tmp_path):
     differ = plain.join(early, on="date").filter((pl.col("pnl") - pl.col("pnl_right")).abs() > 1e-9)["date"].to_list()
     assert differ[0] == dt.date(2021, 5, 24)                                                        # the first call with a venue price: Bitcoin, May 2021
     nothing = cli.build(calls, store, cfg, dt.datetime(2026, 11, 19, 7, 0, tzinfo=UTC))["daily"]
-    assert nothing["allin_12m_early"].equals(nothing["allin_12m"])                                  # with no venue lines the two are the same book
+    assert nothing["allin_247"].equals(nothing["allin_12m"])                                  # with no venue lines the two are the same book
 
 
 EARLY_AT_MARK = 26_107.82    # against 24,634.14 for the first strategy: the calls that had a venue market, bought one hour after their episode
@@ -198,7 +198,7 @@ def test_the_job_buys_a_new_call_early_and_records_it_once(tmp_path, monkeypatch
     for day in (thu, fri):
         assert cli.main(["run", "--fetch", *base], now=at(day), fetch=stand_in_vendor(store, {d: m for d, m in moves.items() if d <= day}), venue_fetch=fetchers) == 0
     assert asked == [] and not (data / venue.ENTRIES).exists()                                      # nothing has entered yet: the venue is not asked
-    assert paper("allin_12m_early").equals(paper("allin_12m"))
+    assert paper("allin_247").equals(paper("allin_12m"))
 
     # Saturday: the call reaches main and the job stamps it
     calls_file.write_text("".join(lines) + "50,guid-n,2026-11-20T22:14:00Z,Jason,Nvidia,NVDA:1,active,2026-11-21T09:52:03Z,,,test\n", encoding="utf-8")
@@ -214,23 +214,23 @@ def test_the_job_buys_a_new_call_early_and_records_it_once(tmp_path, monkeypatch
     assert cli.main(["run", "--fetch", *base], now=at(mon), fetch=stand_in_vendor(store, moves), venue_fetch=fetchers) == 0
     line = f"50,NVDA,hyperliquid,xyz:NVDA,2026-11-21T10:00:00Z,128.5,2026-11-23T21:00:00Z,131.07,{BASIS}\n"
     assert (data / venue.ENTRIES).read_text() == ",".join(venue.COLUMNS) + "\n" + line and asked == ["xyz:NVDA"]
-    plain, early = paper("allin_12m"), paper("allin_12m_early")
+    plain, early = paper("allin_12m"), paper("allin_247")
     assert plain["date"].to_list() == early["date"].to_list() == [thu, fri, mon] and plain["n_trades"].to_list() == early["n_trades"].to_list() == [19, 0, 1]
     share = plain["capital"][2] / 20                                                                # twenty calls, equal parts of Monday's close
     gain = share * (131.07 / 128.5 - 1)
     assert early["pnl"][2] - plain["pnl"][2] == pytest.approx(gain, abs=1e-6) and gain == pytest.approx(10.02, abs=0.01)
     assert plain["pnl"][2] == pytest.approx(10_000 / 19 * 0.03, abs=1e-6)                           # the first strategy is untouched: its one Nvidia call rose 3%
-    manifest = json.loads((out / "allin_12m_early" / "manifest.json").read_text())
+    manifest = json.loads((out / "allin_247" / "manifest.json").read_text())
     assert manifest["entry"] == "venue" and manifest["role"] == "monitor" and json.loads((out / "allin_12m" / "manifest.json").read_text())["entry"] == "close"
 
     # a second run the same night changes nothing and does not ask the venue again
     assert cli.main(["run", "--fetch", *base], now=at(mon, 7), fetch=stand_in_vendor(store, moves), venue_fetch={"hyperliquid": down}) == 0
-    assert paper("allin_12m_early").equals(early) and (data / venue.ENTRIES).read_text().endswith(line)
+    assert paper("allin_247").equals(early) and (data / venue.ENTRIES).read_text().endswith(line)
 
     # from the next day both hold the same thing; the early book has a little more of Nvidia
     moves[tue] = {"*": 1.0, "NVDA": 1.10}
     assert cli.main(["run", "--fetch", *base], now=at(tue), fetch=stand_in_vendor(store, moves), venue_fetch={"hyperliquid": down}) == 0
-    assert paper("allin_12m_early")["pnl"][3] - paper("allin_12m")["pnl"][3] == pytest.approx(gain * 0.10, abs=1e-6)
+    assert paper("allin_247")["pnl"][3] - paper("allin_12m")["pnl"][3] == pytest.approx(gain * 0.10, abs=1e-6)
     assert paper("allin_12m")["pnl"][3] == pytest.approx(2 * share * 0.10, abs=1e-6)
 
     # a buy time typed by hand stops the run before anything is computed

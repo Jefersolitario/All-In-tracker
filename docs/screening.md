@@ -107,6 +107,6 @@ What to push:
 ## 8. For the owner
 
 - Merging the pull request is the trade. A call merged before midnight New York time is bought at the next session's close.
-- The second strategy, `allin_12m_early`, buys the same call on a 24/7 venue at the first hourly open after the merge, so for it the hour of the merge matters.
+- The second strategy, `allin_247`, buys the same call on a 24/7 venue at the first hourly open after the merge, so for it the hour of the merge matters.
 - To reject one call, delete its line in the pull request before merging, or set its `status` to `excluded`.
 - The criteria and the proxy table on this page are yours to edit; the scheduled session reads the version on `main`.
