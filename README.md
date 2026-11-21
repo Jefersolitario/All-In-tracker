@@ -37,13 +37,28 @@ For these reasons the strategy is published with `role = "monitor"`: the dashboa
 | `data/prices_snapshot.csv.gz` | Frozen total-return price levels to 18 Nov 2026 (`data/SOURCES.md` says where each came from). |
 | `data/prices_live.csv` | Daily levels appended by the scheduled job. Rows are never rewritten. |
 | `data/stamps.csv` | Which call the scheduled job stamped, and when. Only the job writes it. |
+| `data/venue_symbols.csv` | Where each ticker trades around the clock, for the second strategy. Yours to edit. |
+| `data/venue_entries.csv` | One line per leg bought early: venue, times and prices. Lines up to call 49 are the backtest; later ones are written by the job, once. |
 | `data/price_trust.csv` | Appears the first time you confirm a ticker's data by hand: which ticker, from which day. Only the job writes it. |
 | `data/episodes.csv` | Catalogue of every episode with its release time. A workflow appends new ones from the publisher's feed. |
 | `data/screening_log.csv` | One line per episode read for calls since 26 Sep 2026: what it was read from and what was found. |
 | `docs/screening.md` | How new episodes are screened: what counts as a call, which instrument, what gets written. |
 | `data/tbill_3m.csv` | Three-month Treasury bill yield (FRED series DTB3), for the Sharpe over bills. |
-| `src/allin/` | `ledger` (calendar rule), `prices` (store and live update), `engine` (portfolio), `episodes` (catalogue), `cli` (publisher), `contract` (results format). |
-| `results/` | Published output: `index.json`, `backtest_summary.parquet`, `allin_12m/daily.parquet`, `manifest.json`, `positions.csv`. |
+| `src/allin/` | `ledger` (calendar rule), `prices` (store and live update), `engine` (portfolio), `episodes` (catalogue), `venue` (buys on a 24/7 venue), `cli` (publisher), `contract` (results format). |
+| `results/` | Published output: `index.json`, `backtest_summary.parquet`, and for each published strategy `daily.parquet`, `manifest.json`, `positions.csv`. |
+
+## The second strategy: bought on a 24/7 venue
+
+`allin_12m_early` holds the same book as `allin_12m` and sells on the same days. The one difference is when a new call is bought.
+
+- **When:** at the first hourly open after the job stamped the call, on a venue that trades around the clock. `allin_12m` waits for the close of the next US session.
+- **Where:** `data/venue_symbols.csv` names the venue and symbol for each ticker: Hyperliquid's stock and commodity contracts, Binance for cryptocurrencies. The file is yours to edit. A ticker that is not in it, or has no candle within six hours of the buy or of the close, waits for the close like in the first strategy.
+- **What it is worth:** the venue's own price when the rule buys, divided by its price at the early buy. The call gets the same dollars as in the first strategy, times that ratio, and the difference is booked on the entry day. From then on both strategies hold the same thing and are valued with the same official closes.
+- **The record:** each buy is written once to `data/venue_entries.csv` by the job: the two times, the two prices and the venue. The times follow from the stamp and the calendar, and the run refuses a line whose times do not. The prices are the venue's public hourly candles, so a line can be checked afterwards.
+- **The comparison moment** is the New York close for US symbols (16:00, also on half days), midnight UTC for cryptocurrencies and the Seoul close for the two Seoul shares.
+- **Not counted:** fees, spread and funding on the venue, and what it would cost to hold the position there for 12 months or to move it into shares.
+
+In the backtest, the 19 calls that had a venue market at the time are bought at the first candle opening at least one hour after their episode. That takes the value on 25 Sep 2026 from 24,634 to 26,108 USD. Most of the difference is two cryptocurrency calls in 2021, when the book held two to four positions. A review of that backtest found no reliable evidence of an edge: 11 of 19 calls did better bought early, and without two SpaceX calls the stocks average +0.1%. The strategy is published with role `monitor` to find out on paper.
 
 ## Adding a call
 
@@ -97,6 +112,8 @@ The job fails on purpose instead of publishing something doubtful. GitHub emails
 | `the bar of <day> is X times the one before it` | A one-day move beyond half or double: a split shown unadjusted, a bad print, or a real collapse. | Check the price. If it is real, run the workflow by hand with the ticker in `allow_jump`. If not, wait: the next run tries again. |
 | `the last stored bars and the download disagree ... no majority agrees` | The vendor's history for the ticker no longer matches what is stored, and not in the way a late dividend would: several changes at once, or the symbol now means something else. | Check the symbol. If the vendor is right, run the workflow by hand with the ticker in `allow_jump`. If the symbol was reused, give the call a `forced_exit`. |
 | `none of the last 7 stored days is in the download` | The vendor's history starts after the last stored bar, so the series cannot be continued. | If the ticker's call is over or has not started, run by hand with the ticker in `allow_jump`: the series starts again at the vendor's level. If it is held, give its call a `forced_exit`. |
+| `venue: cannot download <symbol> from <venue> for call N` | The 24/7 venue could not be reached. Nothing was written, for either strategy. | Wait: the next run tries again. To give up on buying that call early, add one line per leg to `data/venue_entries.csv` with venue `none` and no times or prices. |
+| `venue_entries.csv, call N <ticker>: bought at ..., which is not an hourly open in the six hours from ...` | A line was typed or changed by hand. | Restore the line the job wrote. |
 | `its recorded_utc was not written by the scheduled job` | A stamp was typed into `calls.csv`, or changed afterwards. | Empty the field. The job stamps the call at its next run. |
 | `published days would change` | A line of `calls.csv` was edited after its call entered. | Undo the edit. Only if the change is intended, run the workflow by hand with `allow_restate` set to `yes`. |
 

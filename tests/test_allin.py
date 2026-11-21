@@ -11,7 +11,7 @@ import statistics
 import polars as pl
 import pytest
 
-from allin import cli, contract, engine, episodes, ledger, prices
+from allin import cli, contract, engine, episodes, ledger, prices, venue
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MARK = dt.date(2026, 9, 25)          # the day the recovered backtest marked its open calls
@@ -958,15 +958,15 @@ def test_build_and_publish(tmp_path, calls, store, cfg):
     assert table.filter(pl.col("mode") == "backtest")["date"].max() < cfg["paper_start"]
     assert 10_000 + table.filter(pl.col("date") <= MARK)["pnl"].sum() == pytest.approx(24_634.14, abs=0.5)
     summary = built["summary"]
-    assert set(summary["strategy_id"]) == {"allin_12m", "allin_12m_hosts", "allin_12m_guests", "spy_buy_hold"}
-    assert summary.filter(pl.col("paper_traded"))["role"].to_list() == ["monitor"]
+    assert set(summary["strategy_id"]) == {"allin_12m", "allin_12m_hosts", "allin_12m_guests", "allin_12m_early", "spy_buy_hold"}
+    assert summary.filter(pl.col("paper_traded"))["role"].to_list() == ["monitor", "monitor"]
     with_bills = cli.build(calls, store, cfg, now, cli.load_bills(ROOT / "data"))["summary"]
     both = dict(zip(with_bills["strategy_id"], with_bills["sharpe_vs_bills"]))
-    assert both["allin_12m"] < both["spy_buy_hold"] < 0.7 and summary["sharpe_vs_bills"].null_count() == 4
+    assert both["allin_12m"] < both["spy_buy_hold"] < 0.7 and summary["sharpe_vs_bills"].null_count() == 5
     out = str(tmp_path / "results")
     cli.publish(out, cfg, built, store, len(calls), now_utc=now)
     index = json.loads((tmp_path / "results" / "index.json").read_text())
-    assert index["contract_version"] == 1 and index["strategies"] == ["allin_12m"] and index["data_through"] == str(store.sessions()[-1])
+    assert index["contract_version"] == 1 and index["strategies"] == ["allin_12m", "allin_12m_early"] and index["data_through"] == str(store.sessions()[-1])
     manifest = json.loads((tmp_path / "results" / "allin_12m" / "manifest.json").read_text())
     contract.validate_manifest(manifest)
     assert manifest["role"] == "monitor" and manifest["days_per_year"] == 252
@@ -1079,7 +1079,10 @@ def test_a_call_cannot_be_slipped_onto_a_published_day(tmp_path, calls, store, c
     cli.publish(out, cfg, built, store, len(calls), now_utc=now)
     late = make_call(published="2026-11-16T15:00:00Z", recorded="2026-11-17T20:00:00Z", legs="SPY:1")    # typed in afterwards: enters at the last published close
     assert engine.plan([late], store.sessions())[0].entry == FROZEN_THROUGH
-    changed = cli.build([*calls, late], store, cfg, now)
+    waits = [venue.Entry(late.call_id, "SPY", "none", "", None, None, None, None, "test: not bought early")]   # a stamped call needs its venue line before its entry day is built
+    with pytest.raises(RuntimeError, match=r"calls \[900\] have entered and their venue prices are not in venue_entries.csv"):
+        cli.build([*calls, late], store, cfg, now)
+    changed = cli.build([*calls, late], store, cfg, now, entries=waits)
     contract.check_append_only(built["daily"]["allin_12m"], changed["daily"]["allin_12m"])              # that day's PnL is untouched, so this alone sees nothing
     with pytest.raises(RuntimeError, match="trades or capital"):
         cli.publish(out, cfg, changed, store, len(calls) + 1, now_utc=now)
@@ -1230,7 +1233,7 @@ def test_the_scheduled_run_from_end_to_end(tmp_path, store, backtest_ledger_text
 def test_command_line_run(tmp_path):
     assert cli.main(["run", "--out", str(tmp_path / "out")], now=clock()) == 0
     assert (tmp_path / "out" / "allin_12m" / "daily.parquet").exists()
-    assert pl.read_parquet(tmp_path / "out" / "backtest_summary.parquet").height == 4
+    assert pl.read_parquet(tmp_path / "out" / "backtest_summary.parquet").height == 5
 
 
 def test_committed_results_match_the_code(ledger_all, cfg):
