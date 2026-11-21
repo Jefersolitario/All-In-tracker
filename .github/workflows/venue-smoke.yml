@@ -1,0 +1,23 @@
+name: venue-smoke
+
+# One-off, research branch only: runs the build branch's venue code against the live venues.
+on:
+  push:
+    branches: [claude/venue-prices]
+    paths: ["research/smoke_venue.py", ".github/workflows/venue-smoke.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.ref == 'refs/heads/claude/venue-prices'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -q "git+https://github.com/Jefersolitario/All-In-tracker@claude/venue-entry"
+      - run: python research/smoke_venue.py
