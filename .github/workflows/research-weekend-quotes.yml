@@ -1,0 +1,44 @@
+name: research-weekend-quotes
+
+# Research only, on its own branch. Runs the order-book recorder of the weekend study: a short test whenever the
+# recorder changes, and a full recording when research/weekend-basis/quotes/START changes. The second is a way to
+# start a recording by hand, with a push to this branch, if the scheduled job on main did not start.
+# Public market data only: no key, no account, no orders. It never runs on main and nothing else reads it.
+on:
+  push:
+    branches: [claude/research-weekend-basis]
+    paths:
+      - "research/weekend-basis/record_quotes.py"
+      - "research/weekend-basis/quotes/START"
+      - ".github/workflows/research-weekend-quotes.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weekend-quotes
+  cancel-in-progress: false
+
+jobs:
+  record:
+    if: github.ref == 'refs/heads/claude/research-weekend-basis'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Offline checks
+        run: python research/weekend-basis/record_quotes.py --selftest
+      - name: Record
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --name-only HEAD~1 HEAD | grep -qx "research/weekend-basis/quotes/START"; then
+            python research/weekend-basis/record_quotes.py --git-push
+          else
+            python research/weekend-basis/record_quotes.py --smoke 150 --git-push
+          fi
