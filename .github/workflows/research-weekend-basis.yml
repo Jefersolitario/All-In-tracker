@@ -1,0 +1,55 @@
+name: research-weekend-basis
+
+# Research only, on its own branch: downloads public candles, funding and order-book snapshots from Hyperliquid and
+# Binance spot for the weekend-basis study. No key, no account, no orders. It never runs on main and nothing else reads it.
+on:
+  push:
+    branches: [claude/research-weekend-basis]
+    paths:
+      - "research/weekend-basis/fetch.py"
+      - "research/weekend-basis/fetch_config.json"
+      - ".github/workflows/research-weekend-basis.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: research-weekend-basis
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    if: github.ref == 'refs/heads/claude/research-weekend-basis'
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -q pyarrow
+      - name: Candles, token klines, order books
+        run: python research/weekend-basis/fetch.py main
+      - name: Commit the first part to this branch
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add research/weekend-basis/data
+          if git diff --cached --quiet; then echo "Nothing new."; else
+            git commit -m "research(weekend-basis): venue candles and books"
+            git pull --rebase origin claude/research-weekend-basis
+            git push origin HEAD:claude/research-weekend-basis
+          fi
+      - name: Funding history
+        run: python research/weekend-basis/fetch.py funding
+      - name: Commit the funding files to this branch
+        if: always()
+        run: |
+          git add research/weekend-basis/data
+          if git diff --cached --quiet; then echo "Nothing new."; else
+            git commit -m "research(weekend-basis): venue funding"
+            git pull --rebase origin claude/research-weekend-basis
+            git push origin HEAD:claude/research-weekend-basis
+          fi
