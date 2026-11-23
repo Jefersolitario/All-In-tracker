@@ -2,7 +2,8 @@ name: research-weekend-quotes
 
 # Research only, on its own branch. Runs the order-book recorder of the weekend study: a short test whenever the
 # recorder changes, and a full recording when research/weekend-basis/quotes/START changes. The second is a way to
-# start a recording by hand, with a push to this branch, if the scheduled job on main did not start.
+# start a recording by hand, with a push to this branch, if the scheduled job on main did not start. A full
+# recording stands aside when another one is already running.
 # Public market data only: no key, no account, no orders. It never runs on main and nothing else reads it.
 on:
   push:
@@ -14,16 +15,13 @@ on:
 
 permissions:
   contents: write
-
-concurrency:
-  group: weekend-quotes
-  cancel-in-progress: false
+  actions: read
 
 jobs:
   record:
     if: github.ref == 'refs/heads/claude/research-weekend-basis'
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 356
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,6 +32,8 @@ jobs:
       - name: Offline checks
         run: python research/weekend-basis/record_quotes.py --selftest
       - name: Record
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
