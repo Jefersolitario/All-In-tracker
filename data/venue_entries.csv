@@ -24,3 +24,4 @@ call_id,ticker,venue,symbol,entry_utc,entry_price,close_utc,close_price,basis
 48,GOOG,hyperliquid,xyz:GOOGL,2026-10-30T23:00:00Z,281.22,2026-11-02T21:00:00Z,279.15,backtest: first hourly open at least one hour after the episode
 49,SPCX,hyperliquid,xyz:SPCX,2026-11-07T20:00:00Z,134.86,2026-11-09T21:00:00Z,142.18,backtest: first hourly open at least one hour after the episode
 49,TSLA,hyperliquid,xyz:TSLA,2026-11-07T20:00:00Z,357.85,2026-11-09T21:00:00Z,377.97,backtest: first hourly open at least one hour after the episode
+50,NVDA,hyperliquid,xyz:NVDA,2026-11-21T10:00:00Z,128.75,2026-11-23T21:00:00Z,165.11,paper: first hourly open after the call was recorded
