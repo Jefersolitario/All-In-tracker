@@ -492,6 +492,21 @@ def test_a_ticker_that_stops_trading_stalls_the_job_until_its_call_gets_a_forced
     assert "AAA" not in need                                                        # closed and valued: nothing more to download
 
 
+def test_a_held_ticker_without_a_new_bar_is_reported_from_the_first_run():
+    days, st = small_store(6, AAA=[10, 11, 12, 13, None, None], BTC_USD=[1, 2, 3, 4, 5, None], SKH_USD=[7, 7, 7, None, None, None])
+    plan = engine.plan([make_call(published="2026-01-03T15:00:00Z", legs="AAA:0.25;BTC-USD:0.25;SKH-USD:0.25;SPY:0.25")], days)
+    slot = dt.datetime.combine(days[5] + dt.timedelta(days=1), dt.time(1, 7), UTC)          # the job's slot after the last session: every bar of that day is final
+    lines = cli.missing_bars(plan, st, slot)
+    assert [line.split()[0] for line in lines] == ["AAA", "BTC-USD"]                         # the Seoul share is carried over its holiday: not a gap
+    assert "the last one stored is 2026-01-08, 2 sessions back" in lines[0] and "2026-01-09, 1 session back" in lines[1]
+    assert all("added by hand (see the README)" in line for line in lines)
+    early = dt.datetime.combine(days[5], dt.time(23, 0), UTC)                                # New York has closed, the crypto day has not
+    assert [line.split()[0] for line in cli.missing_bars(plan, st, early)] == ["AAA"]
+    assert cli.missing_bars(engine.plan([make_call(published="2026-01-03T15:00:00Z", legs="SPY:1")], days), st, slot) == []
+    never = engine.plan([make_call(published="2026-01-03T15:00:00Z", legs="ZZZ:1")], days)   # a ticker the store has never held
+    assert "ZZZ has no bar for 2026-01-12: none is stored at all" in cli.missing_bars(never, st, slot)[0]
+
+
 def test_the_download_list_covers_open_and_coming_calls_only():
     days, st = small_store(8, AAA=[10] * 8, BBB=[10] * 8, CCC=[10] * 8, DDD=[10] * 7 + [None])
     open_ = make_call(call_id=1, published="2026-01-03T15:00:00Z", legs="AAA:1")
@@ -832,6 +847,24 @@ def test_a_download_that_overlaps_the_stored_days_only_in_part_is_enough_and_one
     assert (D[4], "AAA", pytest.approx(8.0)) in later                                                # and the next run carries on by itself
     write_snapshot(tmp_path / "c", series)                                                           # for a ticker about to be closed anyway it is not worth stopping
     assert prices.update_live(tmp_path / "c", ["AAA", "SPY"], now, lambda s, start: none[s], optional={"AAA"}) == [(D[3], "SPY", pytest.approx(100.0))]
+
+
+def test_closes_added_by_hand_bridge_a_gap_in_the_vendor_history(tmp_path):
+    """After an 8-for-1 split the vendor's history for AAA stops at the last day before it, although the share trades on.
+    The owner adds the missing close by hand on the stored scale. Nothing breaks while the gap lasts, and when the vendor's
+    history comes back, on its own split-adjusted scale, the series carries on from the stored levels."""
+    write_snapshot(tmp_path, {"SPY": [(D[0], 100.0), (D[1], 101.0), (D[2], 102.0)], "AAA": [(D[0], 800.0), (D[1], 780.0), (D[2], 760.0)]})
+    spy = [(D[0], 100, 100.0), (D[1], 101, 101.0), (D[2], 102, 102.0), (D[3], 103, 103.0), (D[4], 104, 104.0)]
+    adjusted = [(D[0], 100, 100.0), (D[1], 97.5, 97.5), (D[2], 95, 95.0), (D[3], 80, 80.0), (D[4], 84, 84.0)]   # an eighth of the stored levels
+    at = lambda n: dt.datetime.combine(D[n] + dt.timedelta(days=1), dt.time(1, 7), UTC)
+    gap = lambda n: (lambda s, start: {"SPY": spy[:n + 1], "AAA": adjusted[:3]}[s])        # AAA: nothing after D[2], whatever the day
+    assert prices.update_live(tmp_path, ["AAA", "SPY"], at(3), gap(3)) == [(D[3], "SPY", pytest.approx(103.0))]
+    with (tmp_path / prices.LIVE).open("a", encoding="utf-8") as f:
+        f.write(f"{D[3]},AAA,{760.0 * 80 / 95:.8g}\n")                                      # last stored level times the ratio of the two closes, on one split basis
+    assert prices.update_live(tmp_path, ["AAA", "SPY"], at(4), gap(4)) == [(D[4], "SPY", pytest.approx(104.0))]   # the gap is still there: nothing for AAA, no error
+    assert prices.load_prices(tmp_path).on("AAA", D[3]) == pytest.approx(640.0)
+    healed = prices.update_live(tmp_path, ["AAA", "SPY"], at(4), lambda s, start: {"SPY": spy, "AAA": adjusted}[s])
+    assert healed == [(D[4], "AAA", pytest.approx(640.0 * 84 / 80))]                         # every stored bar, the one typed in included, implies the same level
 
 
 def test_a_bar_on_a_day_the_exchange_is_closed_is_dropped(tmp_path, capsys):
@@ -1245,6 +1278,7 @@ def test_committed_results_match_the_code(ledger_all, cfg):
     index = json.loads((ROOT / "results" / "index.json").read_text())
     now = dt.datetime.fromisoformat(index["updated_utc"].replace("Z", "+00:00"))
     traded = [c for c in ledger_all if not cli.is_pending(c, cfg)]
-    new = cli.build(traded, prices.load_prices(ROOT / "data"), cfg, now)["daily"]["allin_12m"]
+    entries = venue.load_entries(ROOT / "data")          # as the job builds: a stamped call that has entered needs its venue line
+    new = cli.build(traded, prices.load_prices(ROOT / "data"), cfg, now, entries=entries)["daily"]["allin_12m"]
     contract.check_append_only(old, new)
     assert new.height >= old.height
