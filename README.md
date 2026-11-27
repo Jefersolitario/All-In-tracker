@@ -96,6 +96,7 @@ A scheduled Claude session reads new episodes twice a day and opens a pull reque
 - A dividend the vendor books late is picked up by the next bar, whatever its size, as long as most of the last seven stored bars are older than the ex-date: up to three sessions late. Booked later than that, it is lost, and the series understates the return by that dividend. Yahoo normally books on the ex-date.
 - A US symbol's bar is stored only on days the New York Stock Exchange is open by its standing rules. An unscheduled closure is not known to the code: a bar the vendor showed for one would become a session with no move.
 - If a held US ticker has no bar for one session and trades again the next, that session is published with the ticker at its previous close and the two-day move lands on the next day.
+- A held ticker that has no bar for the latest session is named in a warning on the run from the first time. The job stops only once more than three sessions are stuck behind it.
 - Samsung and SK Hynix are held as dollar series built from the Seoul listings and the won-dollar rate. Over a Seoul holiday they are carried at their last close; the run prints a warning when a carried price is more than four days old.
 - A won-dollar rate more than 10% away from the two before it is taken for a bad print. That day's bar is left out with a warning and the shares are carried at their last close; the next good bar brings the level up to date. Nothing stops.
 - A call that loses its whole stake (a short that more than doubles) is closed at nothing that day.
@@ -107,7 +108,7 @@ The job fails on purpose instead of publishing something doubtful. GitHub emails
 
 | Message | What happened | What to do |
 |---|---|---|
-| `N sessions cannot be published: since <day> there is no price for <ticker>` | The ticker stopped trading (takeover, delisting) or the vendor dropped it. | Put that day in the call's `forced_exit`. The call is closed that day at its last price. |
+| `N sessions cannot be published: since <day> there is no price for <ticker>` | The vendor has had no bar for the ticker for more than three sessions. Either it stopped trading (takeover, delisting), or it still trades and the vendor's history has a gap (Sandisk after its split, November 2026). | Check which. Stopped trading: put that day in the call's `forced_exit`; the call is closed that day at its last price. Still trading: do not close the call, add the missing closes by hand as described under "A ticker that still trades but gets no bars". |
 | `no price history for <ticker>` | The vendor no longer serves the symbol, or could not be reached. | If it keeps failing for one ticker only, the symbol is gone: give its call a `forced_exit` on the first unpublished day. If every ticker fails, the vendor is blocking the runner: wait, the next run tries again. |
 | `the bar of <day> is X times the one before it` | A one-day move beyond half or double: a split shown unadjusted, a bad print, or a real collapse. | Check the price. If it is real, run the workflow by hand with the ticker in `allow_jump`. If not, wait: the next run tries again. |
 | `the last stored bars and the download disagree ... no majority agrees` | The vendor's history for the ticker no longer matches what is stored, and not in the way a late dividend would: several changes at once, or the symbol now means something else. | Check the symbol. If the vendor is right, run the workflow by hand with the ticker in `allow_jump`. If the symbol was reused, give the call a `forced_exit`. |
@@ -117,11 +118,26 @@ The job fails on purpose instead of publishing something doubtful. GitHub emails
 | `its recorded_utc was not written by the scheduled job` | A stamp was typed into `calls.csv`, or changed afterwards. | Empty the field. The job stamps the call at its next run. |
 | `published days would change` | A line of `calls.csv` was edited after its call entered. | Undo the edit. Only if the change is intended, run the workflow by hand with `allow_restate` set to `yes`. |
 
+### A ticker that still trades but gets no bars
+
+Seen once: Sandisk split 8-for-1 after the close of 19 Nov 2026 and Yahoo's daily history for `SNDK` stopped on that day, while the share kept trading and Yahoo's own quote page kept showing its closes. The job cannot tell this from a delisting. From the first run without a bar it prints a warning on the run (`SNDK has no bar for <day>`), and after more than three such sessions it stops.
+
+A `forced_exit` would be wrong here: it closes the whole call, the other legs included. Add the missing closes instead:
+
+1. Take the official close of each missing session from two sources that agree, on one split basis for all of them.
+2. For each day append `date,ticker,level` to `data/prices_live.csv`, where level = the last level stored for the ticker × (that day's close ÷ the close of the last stored day, on the same split basis). If a dividend went ex in between, add it to the close.
+3. Check the result: each new level over the one before it must be that day's real percentage move. A raw post-split price typed in as a level would be stored as a fall of most of the stake, and nothing in the job checks a row typed by hand.
+4. Only days that are not published yet. Note the rows and where the closes came from in `data/SOURCES.md`.
+
+The next run publishes up to the last day added. When the vendor's history comes back the job carries on from the stored levels by itself. Until then the ticker needs another row before more than three sessions pile up again.
+
+This is a bridge for about a week, not a second source. The job downloads from 12 days before the ticker's last stored day and needs at least one of the vendor's bars in that window. Once the rows typed in reach more than 12 days past the vendor's last bar, the run stops with `no price history for <ticker>`. A gap that lasts that long needs another source for the ticker.
+
 A ticker confirmed with `allow_jump` is confirmed once. The job writes the decision to `data/price_trust.csv`, and from then on only the bars stored since that run decide the ticker's next level, so the scheduled runs after it need nothing from you.
 
 ```
 pip install -e ".[dev]"
-pytest -q                         # 71 tests
+pytest -q                         # 82 tests
 python -m allin.cli status        # the book as it stands: what is held, since when, until when
 python -m allin.cli run           # recompute and write ./results from stored prices
 python -m allin.cli run --fetch   # the same after appending the latest final prices

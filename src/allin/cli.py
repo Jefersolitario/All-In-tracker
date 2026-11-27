@@ -165,7 +165,26 @@ def check_not_stalled(store: prices.Prices, through: dt.date, positions: list[en
     if len(behind) > limit:
         who = ", ".join(engine.incomplete_legs(list(positions), store, behind[0])) or "a held ticker"
         raise RuntimeError(f"{len(behind)} sessions cannot be published: since {behind[0]} there is no price for {who}. "
-                           "If the vendor is late, the next run catches up. If the ticker stopped trading, give its call a forced_exit on that day.")
+                           "If the vendor is late, the next run catches up. If the ticker stopped trading, give its call a forced_exit on that day. "
+                           "If it still trades and the vendor's history has a gap (seen after a stock split), add the missing closes by hand: "
+                           "see 'A ticker that still trades but gets no bars' in the README.")
+
+
+def missing_bars(positions: list[engine.Position], store: prices.Prices, now_utc: dt.datetime) -> list[str]:
+    """Held tickers that have no bar for the latest stored session although that bar is final by now.
+
+    The job stops only when more than three sessions are stuck, which is close to a week after the first missing bar.
+    This says so from the first run: one late bar is ordinary, the same ticker missing again the next day is not."""
+    sessions = store.sessions(); last = sessions[-1]; out = []
+    for t in engine.incomplete_legs(list(positions), store, last):
+        seen = store.last(t)
+        if prices.final_through(t, now_utc) < last or (seen is not None and seen >= last):
+            continue                                                  # its day is not over yet, or it already has a later bar
+        n = len([d for d in sessions if seen is not None and d > seen])
+        where = f"the last one stored is {seen}, {n} session{'s' if n != 1 else ''} back" if seen is not None else "none is stored at all"
+        out.append(f"{t} has no bar for {last}: {where}. A late bar arrives with the next run; "
+                   "a ticker that still trades and stays without bars needs its closes added by hand (see the README).")
+    return out
 
 
 def stale_legs(res: engine.Result, store: prices.Prices, days: int = 4) -> list[str]:
@@ -408,6 +427,8 @@ def main(argv: list[str] | None = None, now: dt.datetime | None = None, fetch=No
         print(f"prices: {len(added)} rows added" + (f", through {max(d for d, _, _ in added)}" if added else ""))
         store = prices.load_prices(a.data)
         plan = engine.plan(calls, store.sessions())
+        for line in missing_bars(plan, store, now):
+            print(f"::warning::{line}")                  # before the check below, so the run that stops says it too
         check_not_stalled(store, publishable_through(plan, store, now), plan)
         if any(s.get("entry") == "venue" for s in cfg["strategy"]):
             looked_up = venue.update(a.data, calls, store.sessions(), cfg["recovered_calls_through"], now, venue_fetch)
