@@ -8,7 +8,7 @@
   "paper_start": "2026-11-19",
   "description": "Monitoring only. The same portfolio as allin_12m with one difference: a new call is bought on a venue that trades around the clock (Hyperliquid stock contracts, Binance for crypto) at the first hourly open after the call was recorded, instead of at the close of the next US session. The gain or loss from buying early is the venue's own price at that close over its price at the buy, and it lands on the entry day; after that the two strategies hold the same thing. A ticker with no venue market waits for the close. In the backtest, the calls that had a venue market at the time are bought one hour after their episode. Before fees, spread and funding.",
   "start_cash_usd": 10000.0,
-  "code_version": "8d086fd870",
+  "code_version": "6158f6f665",
   "ledger_version": "68c0fab6da",
   "calls_in_ledger": 50,
   "source_repo": "all-in-tracker",
