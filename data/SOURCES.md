@@ -54,3 +54,12 @@ Only ratios of `tr` between two dates are used.
 | WBD | 2021-01-04 | 2026-10-06 | alm0421/alm0421 data/prices/<ticker>.csv (Yahoo daily bars with adjusted close) |
 | XLE | 2021-01-04 | 2026-11-18 | alm0421/alm0421 data/prices/<ticker>.csv (Yahoo daily bars with adjusted close) |
 | XLU | 2021-01-04 | 2026-11-18 | alm0421/alm0421 data/prices/<ticker>.csv (Yahoo daily bars with adjusted close) |
+
+# Rows of `prices_live.csv` that the scheduled job did not write
+
+The job writes every other row of that file from Yahoo's daily bars. These were added by hand, on 27 November 2026, for days
+that had not been published yet.
+
+| Ticker | Days | Why | How each level was made | Read from |
+|---|---|---|---|---|
+| SNDK | 2026-11-20, 2026-11-23, 2026-11-24, 2026-11-25 | Sandisk split 8-for-1 after the close of 19 Nov 2026 (Form 8-K of that date; split-adjusted trading from 20 Nov, same symbol). Yahoo's daily history for SNDK has had no row since: its table ends on 19 Nov with only the split line after it, while its quote page shows the later closes. The job got no bar in any run from 21 to 27 Nov and stopped on 26 Nov. | Level stored for 19 Nov (755.15998) times that day's close over the 19 Nov close on the post-split basis (755.16 / 8 = 94.395). No dividend in that stretch. Closes used: 79.24, 87.71, 77.95, 73.61. | 25 Nov: Yahoo's quote page (73.61, down 4.34, which also gives 77.95 for 24 Nov), Motley Fool, FinanceFeeds. 23 Nov: Motley Fool, FinanceFeeds. 20 Nov: FinanceFeeds only, which credits StockAnalysis; its stated daily moves (-16.05%, +10.69%, -11.13%, -5.57%) match the four levels. |
